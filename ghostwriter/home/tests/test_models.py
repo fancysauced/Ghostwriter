@@ -36,9 +36,7 @@ class UserProfileModelTests(TestCase):
         )
         cls.in_memory_image = image
 
-        cls.uploaded_image_file = SimpleUploadedFile(
-            image_file.name, image_file.read(), content_type="image/png"
-        )
+        cls.uploaded_image_file = SimpleUploadedFile(image_file.name, image_file.read(), content_type="image/png")
 
     def test_crud_finding(self):
         # Create
@@ -53,29 +51,14 @@ class UserProfileModelTests(TestCase):
         profile.save()
         self.assertIn("fake.png", profile.avatar.path)
 
+        # Test clean-up Signal on profile change
+        refetch = UserProfile.objects.get(user=user)
+        old_avatar_path = refetch.avatar.path
+        self.assertTrue(os.path.exists(old_avatar_path))
+        refetch.avatar = self.uploaded_image_file
+        refetch.save()
+        self.assertFalse(os.path.exists(old_avatar_path))
+
         # Delete
         user.delete()
         self.assertFalse(UserProfile.objects.all().exists())
-
-    def test_avatar_url_property(self):
-        user = UserFactory()
-        profile = UserProfile.objects.get(user=user)
-        try:
-            # Test default avatar file is returned
-            url = profile.avatar_url
-            self.assertIn("images/default_avatar.png", url)
-
-            # Set avatar file and confirm URL changes
-            profile.avatar = self.uploaded_image_file
-            profile.save()
-            profile.refresh_from_db()
-            url = profile.avatar_url
-            self.assertIn(f"images/user_avatars/{user.id}/fake.png", url)
-
-            # Delete the avatar file and confirm default avatar is returned
-            os.remove(profile.avatar.path)
-            profile.refresh_from_db()
-            url = profile.avatar_url
-            self.assertIn("images/default_avatar.png", url)
-        except Exception:
-            self.fail("UserProfile model `avatar_url` property failed unexpectedly!")

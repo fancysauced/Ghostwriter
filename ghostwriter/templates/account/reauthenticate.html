@@ -1,0 +1,33 @@
+{% extends 'account/base_reauthenticate.html' %}
+
+{% load allauth %}
+{% load i18n %}
+{% load crispy_forms_tags %}
+
+  {% block reauthenticate_content %}
+    <p class="auth-journey-intro">{% blocktranslate %}Enter your password to continue.{% endblocktranslate %}</p>
+
+    <!-- Form Error Section -->
+    {% if form.errors %}
+    <script>
+    {% for field in form %}
+      {% for error in field.errors %}
+        displayToastTop({type: 'error', string: '{{ error|escapejs }}', context: 'form'});
+      {% endfor %}
+    {% endfor %}
+    {% for error in form.non_field_errors %}
+      displayToastTop({type: 'error', string: '{{ error|escapejs }}', context: 'form'});
+    {% endfor %}
+    </script>
+    {% endif %}
+    {% url 'account_reauthenticate' as action_url %}
+    <!-- Form Section -->
+    <form class="validate auth-journey-form" method="POST" action="{{ action_url }}" novalidate>
+      {% csrf_token %}
+      {{ form|crispy }}
+      <div class="auth-journey-actions">
+        <button class="btn btn-primary auth-challenge-submit" type="submit"><i class="fas fa-shield-alt" aria-hidden="true"></i> {% trans "Confirm access" %}</button>
+      </div>
+    </form>
+
+  {% endblock%}

@@ -1,8 +1,2233 @@
 # Changelog
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [7.3.3] - 13 November 2026
+
+### Added
+
+* Added JSON activity log exports, including a quick download action and optional evidence and recording attachments in a ZIP archive (PR #1004)
+* Added an opt-in command output option for CSV and JSON activity log exports; output is omitted by default (PR #1004)
+
+### Changed
+
+* Made Hasura's event delivery HTTP pool size configurable with `HASURA_GRAPHQL_EVENTS_HTTP_POOL_SIZE`, defaulting to 10 to reduce concurrent webhook database demand (PR #1003)
+* Upgraded development and production Python containers to 3.11.18 and `dnspython` to 2.9.0 (PR #1003)
+* Escaped newlines and terminal control characters in exported CSV command output to keep output on one physical line (PR #1004)
+
+### Fixed
+
+* Fixed VirusTotal domain checks aborting a batch when a report is not found; missing reports now preserve existing reputation data and report a domain-specific error (PR #1003)
+* Fixed activity log monitoring failing on entries without a start date; reviews now use the latest dated entry and treat logs without dated entries as inactive (PR #1003)
+* Allowed activity log CSV imports without an `output` column, preserving existing command output when updating matching entries (PR #1004)
+* Prevented JSON activity log exports from colliding with the ZIP attachment manifest and kept exported entries consistent with packaged attachments (PR #1004)
+
+## [7.3.2] - 13 October 2026
+
+### Fixed
+
+* Fixed Word and PowerPoint report exports failing on text outside paragraphs or dropping content in ordinary pasted HTML containers, while preserving supported inline formatting (Fixes #992)
+* Fixed evidence not appearing in generated PPTX reports, including references in supporting finding sections and rich-text extra fields (Fixes #990)
+* Fixed tagged findings, observations, domains, static servers, and activity log entries failing to export from the Django admin console after dependency upgrades (Fixes #991)
+* Fixed the activity log Columns button from rotating with its icon rotates when expanded
+* Fixed ARM64 production image builds by compiling frontend and collaboration bundles on the native build platform
+
+### Changed
+
+* Updated JavaScript dependencies and migrated GraphQL generation to explicit Hasura scalar types
+
+## [7.3.1] - 5 October 2026
+
+### Added
+
+* Added a `Clear all` action for failed task system notifications, preserving task history and current service warnings
+* Added a yellow system warning for regular users with guidance to contact a manager or admin when failed jobs or service issues require attention
+* Added matching `Add` actions beside every `Delete` button in project, client, and server form entries to make repeated entry easier, with balanced action-bar spacing
+
+### Fixed
+
+* Hid legacy TOTP and static recovery code devices from Django Admin to avoid confusion with the newer MFA management section
+* Added `Back to report` navigation to report finding, observation, and extra field editors, independent of working report selection or pinned navigation
+* Refreshed heading and table caption bookmark dialogs, corrected the table dialog title, and enabled keyboard saving with reliable input focus
+* Refreshed the rich text `Edit Link` dialog and kept editor modal backdrops above the working engagement bar and its sticky background strip
+* Moved dashboard health checks to the background with automatic schedule recovery and skipped missed intervals; all users see green, yellow, red, or unavailable indicators, while diagnostics remain restricted to managers and admins
+* Made the entire report-field writing pane editable
+* Placed the scroll-to-top control in compact, balanced page gutters so it cannot cover messages or table actions, with keyboard access and reduced-motion support
+* Made dashboard work rows consistent, using the `Working` report badge to identify items from the current report
+* Kept collaborative editor formatting controls visible below the working engagement bar, with report field writing panes that fill available space and compact help/status footers on larger screens
+
+## [7.3.0] - 30 September 2026
+
+### Added
+
+* Added a working-context application shell with customizable sidebar navigation and quicker access to active engagements and reports
+* Added a new report email field for user profiles
+  * This field overrides the account's email address for reporting functions
+  * If a report email is set, that email address will appear in reports instead of the account's email address
+
+### Changed
+
+* Upgraded the interface from Bootstrap 4 to Bootstrap 5.3 and replaced legacy components and styles with the refreshed design system
+* Redesigned the dashboard and the primary client, project, infrastructure, reporting, operation log, profile, credential, and administration workflows
+  * Updated cards, tables, forms, tabs, modals, menus, filters, empty states, and status presentations for greater consistency and readability
+  * Improved theme support, keyboard and screen-reader accessibility, and navigation behavior in narrow windows
+* Modernized rich-text editing and preview workflows with the refreshed TipTap-based editors
+
+### Security
+
+* Added a report-only Content Security Policy baseline across Django and Nginx as groundwork for future CSP enforcement
+
+## [7.2.7] - 22 September 2026
+
+### Fixed
+
+* Fixed Asciinema recording uploads containing null characters that could cause the recording save transaction to fail.
+
+## [7.2.6] - 10 August 2026
+
+### Fixed
+
+* Fixed a report finding ordering feedback loop that could generate excessive Hasura events, database writes, and logs after bulk inserts (Closes #924)
+  * Finding positions now converge deterministically under concurrent and out-of-order events without delaying collaborative updates
+  * Long-running collaborative editors renew document-scoped JWTs through the authenticated Django session
+
+## [7.2.5] - 1 August 2026
+
+### Changed
+
+* Improved logging for skipped signal imports and background task failures
+
+### Fixed
+
+* Fixed block-level rich-text content rendering outside table cells in Word reports
+  * Headings, blockquotes, code blocks, lists, page breaks, evidence, images, and captions now remain in their original cells
+* Corrected the AJAX URL for deleting report observations
+  * This fixed a typo in the path, but had no effect on functionality
+* Fixed activity-log sanitization confirmation and scoped its CSRF header to its own request
+* Fixed expired API and service token feedback so the appropriate token row and empty state are updated in the UI
+* Fixed PowerPoint report generation when rich-text table cells contain blockquotes or preformatted text
+
+### Security
+
+* Restricted report finding reorder operations to findings attached to the authorized report
+  * Reorder requests containing a finding from another report are rejected without modifying any findings
+* Prevented report titles from being interpreted as HTML when activating a report
+* Restricted GraphQL local finding-note updates and deletions to the note owner for non-privileged users
+* Restricted global and protected report template management and template deletion across Django and Hasura
+  * Managers, administrators, and users explicitly granted report template management permission may administer global templates
+  * Report template management permission does not grant access to unrelated clients or projects; client-scoped templates retain their existing client access checks
+  * Regular users may continue creating and editing unprotected templates for clients they can access
+* Required bearer authentication and authenticated-principal authorization for Hasura tag actions
+  * Direct public access to tag action handlers is blocked, and the shared action secret no longer has an insecure default
+* Restricted report filename rendering to detached JSON primitives and applied matching validation to Django and Hasura template uploads
+  * Report-controlled Jinja templates can no longer reach live serializers, querysets, models, or other application objects
+* Hardened Jinja2 report rendering against sandbox escapes while preserving user-authored report templates and previews
+  * Operation-log values are treated as literal report data, including values containing captured Jinja2 payloads
+  * Lazy rich-text rendering now rejects templates that were not compiled by Ghostwriter's sandboxed environment
+  * Report template objects, Python callables, and document-export objects no longer expose unsafe attributes or call paths to Jinja2
+* Hardened user-controlled values rendered in JavaScript contexts to prevent stored cross-site scripting
+  * Autocomplete data is now serialized as inert JSON instead of being interpolated into JavaScript source
+  * Tag autocomplete suggestions are scoped to objects the current user can access
+  * Additional inline JavaScript values and activity-log rich-text previews are escaped or sanitized for their output context
+  * These changes are related to [GHSA-5xvc-cm65-jw3p](https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-5xvc-cm65-jw3p), but go beyond that to further harden sanitization (Thank you to [@hippiiee](https://github.com/hippiiee) for reporting the original issue!)
+* Added matching Django and Hasura validation for domain and static server names while preserving user access to create and manage shared inventory
+* Restricted Django Q scheduled tasks to a server-controlled allowlist (Closes #911)
+  * The admin panel now exposes only approved functions, Slack notification hooks, and validated task arguments
+  * Optional system commands must be configured as fixed argument vectors on the server and run without a shell
+  * Schedule saves, queue submissions, result hooks, and worker execution enforce the policy independently
+  * Added `audit_django_q_policy` to identify or pause existing schedules that do not satisfy the configured policy
+
+## [7.2.4] - 21 July 2026
+
+### Added
+
+* Added shortcuts to the editors for easily inserting dates and times
+  * `@now` / `@time` inserts `HH:mm:ss UTC`
+  * `@today` / `@date` inserts the date using Django’s configured `DATE_FORMAT`
+  * Spaces and unicode punctuation trigger the expansion
+  * There are guards in place so code blocks and email-like strings do not trigger expansion
+  * If an editor is left open overnight, there is a trigger to refresh the date
+
+### Fixed
+
+* Fixed an issue where a blank line would be included after lists in report output
+
+## [7.2.3] - 18 July 2026
+
+### Added
+
+* Added a _Now_ button to the _End Date_ field in the oplog entry form
+  * This button sets the field to the current date and time
+  * Useful for editing the end date of an action after a command finishes
+* Added a _Default Source_ field to logs
+  * Whatever string you set here will be set as the source IP/hostname for any new log entries
+  * Useful if you are manually logging multiple activities from the same system
+  * This is an experiment; if it is useful, we will explore this for other fields
+
+### Changed
+
+* The oplog entry edit form will now open automatically when you create a new entry
+* Made oplog datetime values consistent with the server's timezone
+  * Ghostwriter defaults to UTC for the server
+  * New entries always started with the _Start Date & Time_ set to "now" in UTC (regardless of the server timezone)
+  * The datetime values are always stored in the database as UTC
+  * Now, the oplog is aware of the server's timezone and will use it for datetime entry
+
+### Fixed
+
+* Fixed `loaddata` trying to also load the demo BloodHound JSON during a build
+  * This caused an error that could be confused as a build failure
+  * `loaddata` now only loads `initial.json`
+
+### Security
+
+* Updated the Hasura GraphQL container image to v2.45.6 to take advantage of bug and security fixes
+
+## [7.2.2] - 17 July 2026
+
+### Added
+
+* Added a `category_value` filter to parse domain categories for presenting in the interface
+  * The filter handles more than just the basic `{"source": "category"}` pairings from VirusTotal
+  * Ensures the result is a string that can be safely passed through `bleach`
+* Added a management command to populate a test database for test environments and demonstrations
+  * This new command applies Ghostwriter's database fixtures and then populates a deterministic test database
+  * The goal is to populate the database with data that looks real enough to immediately jump into a "live" environment
+  * It also creates a custom field of each type on every model that supports custom fields
+  * More information in the wiki
+* Added sanitization auditing and status to activity logs
+  * Each completed, on-demand sanitization records its time, requesting user, and selected fields
+  * Log entries now track material updates, allowing Ghostwriter and GraphQL clients to identify logs changed since their most recent sanitization
+  * The activity-log header displays sanitization status and details, including when it is no longer current
+
+### Fixed
+
+* Fixed heading bookmarks not appearing in Word's bookmark list when using Insert > Bookmark (Fixes #707; Closes #792)
+  * Ghostwriter now emits two bookmarks over each heading’s text, a visible name and a hidden `_Refname` alias
+  * Captions keep only `_Refname`, and `{{.ref}}` keeps targeting `_Refname`
+  * This preserves old templates while making only headings appear in Word’s normal bookmark list
+* Fixed oplog edit modal scrolling to the bottom on open under certain conditions
+* Fixed some collab editor styling and form handling
+* Fixed multi-line table cells not rendering properly in reports
+
+## [7.2.1] - 9 July 2026
+
+### Added
+
+* Added support for a new `--required-only` for loading seed data
+  * Fixtures can now be flagged with `"required": false`
+  * The `loaddata` command will not load fixtures marked as such when the flag is set
+* Added option to scope a service token by client
+  * This works similarly to _All Accessible Projects_ but filters the access by one or more clients
+  * The token will have access to all current and future user-accessible projects under the selected client(s)
+* Added preview modals for findings and observations on reports
+  * These now have _Preview_ buttons in their dropdown menus
+* Added jinja2 rendering to field preview modals for finding, observation, report, and project fields
+  * Continuing preview enhancements from v7.2.0, previews now render Jinja2 templating using the report context
+  * Clicking the _Preview_ buttons will now trigger the modal and a _Rendering rich text preview..._ loading message
+  * It will take a moment to generate the context and render any Jinja2
+  * If there are syntax errors, rendering will fail and there will be an error message
+* Added configuration options to the General Settings to control maximum token lifetime and credential rotation
+  * Maximum Token Lifetime in Days (default: 365) limits how far into the future a token expiry date may be set
+  * Require Token Rotation to Extend Expiry (default: True) forces token rotation when extending expiry
+* Added the option to regenerate API and service tokens to immediately roll the credential and receive a new token
+
+### Changed
+
+* **Updated Ghostwriter CLI Binaries**: Updated the pre-built Ghostwriter CLI binaries to v1.0.1
+* Marked the starter templates as non-required so they will not re-appear during updates and container builds if deleted
+* Adjusted the Docker service configurations to cap log file size to 30MB (maximum of 3 files * 10MB each)
+  * This caps the size of all logs to ~240MB
+* Preview modals for rich-text fields now render references, captions, and client logo objects
+  * References will be represented by your figure label and a placeholder—e.g., `Figure #`
+  * Captions will also use the configured caption label and prefix and show the caption text–e.g., `Figure # — Caption Contents`
+  * Client logo objects will insert the client logo when available
+    * Logos are set to a static 6.5" width to align with Office's default width and keep very large or wide logos under control
+* When editing an API token's expiration date, the form and back-end now enforce the *Maximum Token Lifetime in Days* setting
+* The `whoami` query now works with service tokens
+* Changed the Hasura GraphQL build to add a copy of BusyBox for health checks
+  * The Hasura base image uses Ubuntu Jammy, and installing `curl` during emulated `linux/arm64` builds can trigger `libc-bin` post-installation failures under QEMU
+  * The Hasura image no longer runs `apt-get` just to provide a health check command
+  * Hasura health checks now use the bundled BusyBox `wget` probe instead of `curl`
+
+### Fixed
+
+* Removed tags from autocomplete suggestions in filters so they work as expected when selecting them (Fixes #927)
+
+### Security
+
+* Adjusted WebSocket consumers to check object access to match access controls used elsewhere
+  * Please see security advisory for details: [https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-f6w3-9v9c-5364](https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-f6w3-9v9c-5364)
+
+## [7.2.0] - 30 June 2026
+
+### Added
+
+* Added Playwright as a local dev package for end-to-end testing
+* Added evidence metadata parser coverage for collaborative editor evidence loading
+
+### Changed
+
+* **Breaking:** All evidence now attaches to a report object and is available to all findings and other report fields
+* XLSX report exports now populate the "Supporting Evidence" column from report evidence references used by each finding
+  * This includes first-class evidence objects, legacy `{{.Evidence Name}}` tags, `{{.ref Evidence Name}}` references, and `{{.caption Evidence Name}}` captions
+* Collaborative editor evidence loading now validates report metadata before querying evidence and keeps the evidence tool disabled only until report-scoped evidence context is ready
+  * Users can still upload and insert report evidence from finding, observation, and report extra field editors
+* Previews of extra fields now more closely match your report configuration
+  * Image evidence will appear in accordance with your border, image width, and alignment configurations
+  * Captions will appear above or below evidence based on the configured location
+  * Text evidence now matches other code blocks as they typically do in the final reports
+    * They no longer inherit a border based on the border configuration
+    * They are now the full width of the content instead of bound to the evidence width intended for images
+* The extra fields section of the report dashboard now presents fields as cards for easier review and access
+* Loading of JSON extra fields is now "lazy" to defend page performance when these fields contain large JSON blobs
+  * The JSON data is also removed after closing the preview to maintain page performance
+
+### Fixed
+
+* Fixed severity colors appearing incorrect in xlsx reports
+
+### Removed
+
+* **Breaking:** Removed finding-level evidence ownership
+  * Existing finding-owned evidence migrates to the owning report
+  * In case of friendly name collisions, the migration adjusts the friendly name as needed to preserve both evidence records
+  * References to renamed migrated evidence update in the source finding's rich-text fields and extra fields
+  * The evidence upload API and Hasura metadata no longer accept non-empty `finding` or `findingId` evidence associations
+
+## [7.1.3] - 26 June 2026
+
+### Changed
+
+* Optimized service-token GraphQL user-resolution permissions for large project queries
+  * Service-token access now resolves related project users through a database-backed access view instead of repeatedly expanding a large Hasura permission tree
+  * Project and operation log service-token scopes remain unchanged
+
+### Fixed
+
+* Fixed icons on filter fields not displaying properly
+
+## [7.1.2] - 24 June 2026
+
+### Fixed
+
+* Fixed `datetime-local` rendering for white card and deconfliction edit forms so saved timestamps display reliably in older browsers (Closes #917)
+
+### Security
+
+* Fixed additional client-scoped report template authorization bypasses in template swapping, report generation, archive generation, linting, and lint result endpoints
+  * Report template selection now only accepts global templates or templates scoped to the report project's client
+  * This fix includes two temporary breaking changes for the API while we work on a custom endpoint to handle this new business logic:
+    * **Breaking:** The GraphQL API no longer allows `user` or `manager` roles to set report template ID columns directly when creating or updating reports
+    * **Breaking:** The GraphQL API no longer allows `user` or `manager` roles to update a report's project ID column directly
+
+## [7.1.1] - 18 June 2026
+
+### Fixed
+
+* Fixed project collaborative notes failing to load for users with project access (Fixes #913)
+  * The collaborative editor JWT is now scoped to the project so assigned users, project invitees, client invitees, managers, and admins can edit shared project notes
+
+### Security
+
+* Fixed an authorization bypass that allowed authenticated users to download client-scoped report templates by direct URL
+  * Template downloads now use the same client access check as the template detail page
+  * Please see security advisory for details: [https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-hx63-6fvp-4rpv](https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-hx63-6fvp-4rpv)
+
+## [7.1.0] - 16 June 2026
+
+### Added
+
+* Added a workflow to check the GraphQL codegen whenever models change to ensure there is no drift (Closes #849)
+* Added tracking for the active report in the browser's localstorage along with a mechanism to re-activate the report on user login
+
+### Changed
+
+* Switched from `docxtpl` to a Ghostwriter fork to implement performance improvements (Fixes #585; Closes #822)
+  * Implemented changes in the upstream `docxtpl` development branch
+  * Will consider returning to using the Pypi package when the new maintainers are able to merge the development changes and begin tagging releases
+* Updated Django to v5.2 with groundwork completed for Django v6.x (Closes #824)
+  * Going slow with version upgrades to ensure there are no issues with dependencies
+* The dashboard calendar will now show all projects accessible to the user (Closes #871)
+  * For most users, the calendar will not appear to have changed, except for now including more details
+  * For managers and others with access to more projects, they will now be able to see how all their projects relate to each other in the calendar
+* Improved operation log narrative outline insertion for report fields
+  * Preserves formatted comments, inserts operation log output as code blocks, and keeps linked evidence with matching `{{.ref ...}}` lines
+  * Formats commands as inline code and user context as italic text in inserted narrative lines
+  * Uses only the operation log output field for output blocks, not attached terminal recording text
+
+### Fixed
+
+* Adjusted how the TinyMCE editors load to fix pages sometimes scrolling down to newly initialized TinyMCE fields
+
+## [7.0.2] - 10 June 2026
+
+### Fixed
+
+* Fixed evidence listings inside the collab editor for privileged users
+  * The list of evidence could appear empty for admins and managers if they were not assigned to the related project
+  * Permissions checked for project data access via invites and assignments, but missed access from the privileged roles
+
+## [7.0.1] - 10 June 2026
+
+### Fixed
+
+* Fixed API database migrations breaking when the existing database has many existing API tokens
+
+## [7.0.0] - 3 June 2026
+
+### Breaking Changes
+
+* User-managed API tokens are now opaque `gwat_` credentials instead of JWTs
+  * Existing user-managed JWT API tokens must be rotated to receive an opaque API token
+  * API token expiry edits rotate the token prefix, secret hash, and UUID identifier, which immediately invalidates the previous credential
+* Django admin can no longer create user-bound API tokens
+  * Use service principals and service tokens for non-human integrations
+  * Admin-created user-bound API tokens should be replaced with user-created API tokens or scoped service tokens, depending on whether the credential should act as a user or as a non-human service
+* Login and collaborative editor JWTs now use explicit JWT typing and are accepted only by their intended authentication paths
+  * Collaborative editor JWTs authenticate to Hasura only as a restricted `collab` role for the editor's required read-only queries
+  * Login JWTs require a tracked, unrevoked user session bound by the `jti` claim
+* Service-token GraphQL access now uses the new `service` role and scoped service-token permissions instead of inheriting a creating user's permissions
+
+### Added
+
+* **Scoped Service Tokens**: Added service principals and service tokens for non-human automation credentials (Closes #881)
+  * Service principals represent durable integrations or automation services
+  * Service tokens are opaque `gwst_` credentials with hashed secrets, expiration, revocation, and last-used tracking
+  * Service token permissions are assigned to the token instead of inheriting the creating user's permissions
+  * Added operation log read/write tokens scoped to one operation log and its entries
+  * Added project read-only tokens scoped to selected projects or all projects the creator can access now and later
+* **Service Token GraphQL Access**: Added a Hasura `service` role for scoped service-token access
+  * The shared `service` role exposes a combined service-token schema; each token's grants still determine which protected rows and Actions it can use
+  * Project read access is backed by database views that validate the service token, service principal, creator status, and current project access
+  * Service tokens can read project-related data, project-linked operation logs, evidence, reports, findings, observations, and public libraries
+  * Service tokens can call selected read-oriented GraphQL Actions when their token grants allow the target resource, including report generation, evidence and recording downloads, tag lookups, and extra field specs
+* Added service-token management to the Django admin
+* Added documentation for API tokens, service tokens, and service-principal concepts
+* Added user-session tracking for login JWTs so administrators can revoke active GraphQL sessions
+* Added a management command to clean up expired Django sessions and tracked GraphQL login sessions
+
+### Changed
+
+* Reworked the user profile page to organize API tokens and service tokens into clearer cards
+  * API tokens are described as user-bound automation credentials
+  * Service tokens are described as scoped non-human credentials
+  * Expired tokens can be hidden, and that preference is remembered in local storage
+  * Token expiry dates now use warning styling when expiring within seven days and expired styling after expiration
+  * API tokens now show last-used timestamps alongside service tokens
+  * API tokens now have lazy-loaded details modals showing the token user's current project access
+* Added profile controls for editing API token and service token expiry dates
+  * API token expiry edits now generate a replacement opaque token so the previous credential stops working immediately
+* Added service-token detail modals that show service principal, project read access, direct operation-log access, stale project grants, and token access summaries
+* Improved dark-mode styling for disabled fields
+* Made the sidebar toggle tab sticky while scrolling
+* Added the `DJANGO_MFA_PASSKEY_LOGIN_ENABLED` environment variable for controlling passkey login support
+* API tokens are now opaque `gwat_` credentials with hashed secrets instead of user-managed JWTs
+  * Editing an API token expiry rotates the token prefix, secret hash, and UUID identifier
+* Login and collaborative editor JWTs now use explicit JWT typing
+  * Login JWTs bind their `jti` claim to a tracked user-session identifier
+  * Collaborative editor JWTs use a dedicated token type and restricted Hasura role
+
+### Fixed
+
+* Fixed observation library create/edit/delete permissions not being checked for the `user` role in the GraphQL API
+* Fixed token tables showing as empty when **Hide Expired** hides every API token or service token
+* Fixed hyperlinks not working properly in open Office alternatives like LibreOffice (Fixes #890; Thanks to @wexew-ware)
+
+### Security
+
+* Updated Django from 4.2.16 to 4.2.30 to address CVE-2026-3902 in `ASGIRequest` (Fixes #896)
+* Added service-token authorization helpers for Django-backed Hasura Actions so service tokens are denied by default unless an action explicitly opts in
+* Login JWT validation now checks the tracked user session after verifying the JWT signature and expiration so sessions can be revoked on demand
+* Collaborative editor JWTs are restricted to a dedicated Hasura role and accepted by the collaborative editor permission-check endpoint
+* API token validation now verifies the opaque token secret against a stored hash and rejects revoked, expired, or inactive-user tokens
+* API token expiry edits now invalidate the previous credential and show the replacement token once
+* Service-token validation now uses explicit secret-checking terminology internally and keeps full lifecycle validation on the manager path
+* Added Hasura metadata validation tests to catch service-role permission drift, legacy service-token headers, and unexpected service mutations
+* Added validation for service-token permission resource, action, and constraint combinations
+
+## [6.3.6] - 26 May 2026
+
+### Fixed
+
+* Fixed creating a new client with an incomplete point of contact causing a server error instead of displaying required-field validation errors (Fixes #889)
+
+## [6.3.5] - 7 May 2026
+
+### Fixed
+
+* Fixed "Safety" incorrectly appearing as an option for some fields in the CVSS v4 calculator
+* Fixed invalid CVSS vectors preventing report generation
+
+## [6.3.4] - 24 April 2026
+
+### Added
+
+* Added `is_tier_zero` to BloodHound Enterprise findings for easy tier zero identification
+
+### Fixed
+
+* Fixed an edge case with `LargeDefaultGroup` findings from BloodHound Enterprise that could cause a source/target pairing to have an incorrect severity assigned
+
+## [6.3.3] - 23 April 2026
+
+### Fixed
+
+* Fixed an issue in the BloodHound Enterprise findings parser that could cause an incorrect severity calculation
+* Fixed the `primary` field not being available for client contacts for all users when creating via the GraphQL API (Fixes #880)
+
+## [6.3.2] - 21 April 2026
+
+### Changed
+
+* The BloodHound global server configuration now has an explicit flag to be set that allows it to be used as a fallback for projects
+  * Defaults to off so the configuration is more explicitly opt-in
+  * Previously, the fallback was implicit when you configured the global server
+* Adjusted permissions for triggering a global BloodHound data fetch
+  * Changed from any authenticated user to users with access to a project using the global configuration or privileged users
+* Changed some Cypher queries to use `count()` to avoid potential issues with very large environments
+* Pinned base images for containers to specific versions for reliability (e.g., `node:25` to `node:25.9.0`)
+* Adjusted the collection of users with `pwdlastset` older than 90 days to only include enabled users
+
+### Fixed
+
+* Fixed the BloodHound API fields being required when trying to create a project via the GraphQL API (Fixes #877)
+
+## [6.3.1] - 17 April 2026
+
+### Added
+
+* **Control Over Max File Size**: Added `GHOSTWRITER_MAX_FILE_SIZE` to manage the maximum file size for uploads
+  * This new value defaults to 10MB and can be controlled via Ghostwriter CLI
+  * The value limits the size of evidence and terminal recording uploads and downloads
+  * These files load into memory for certain actions (e.g., recording playback, base64-encoding) and this guards against extremely large files using excessive system resources
+
+### Changed
+
+* **Better Control Over Image Evidence Display**: Global and template values for controlling evidence width and alignment
+  * Previously, you could only set image width on a template and images were always center aligned
+  * Width and alignment are now global report configuration values and template configuration values
+  * Ghostwriter uses the global value unless a template has its own values set
+  * If no width value is set inn either location, Ghostwriter defaults to 6.5" (full width for a default Word document)
+* Offloaded alignment of code blocks for text evidence to the `CodeBlock` style in the template
+  * Previously, Ghostwriter always set code blocks to be left aligned
+  * Ghostwriter will now set left alignment only if the `CodeBlock` style is missing
+  * The `CodeBlock` style's alignment configuration will determine the block's alignment
+* The MOTD banner's `banner_link` field is now a URL field and applies URL validation
+* Set a max upload size for evidence as a guard against very large uploads
+* The collaborative editor's color picker now validates color values
+* Added sanitization to strip some characters from the export filenames for operation logs for safer exports
+* The start script for Django will now run the `migrate_totp_device` to migrate MFA records set up prior to v6.1
+* Restricted links in the collaborative editor to valid URL schemes (e.g., http, https, mailto)
+* Changed the `to_datetime` filter to not require a format string
+  * The filter will now automatically match a format string with Django's `DATE_INPUT_FORMATS` when a format string is not provided
+* Adjusted tag autocomplete to only offer tags already applied to objects to which the user has access
+
+### Fixed
+
+* Fixed MFA recovery codes not displaying when they should
+* Fixed an issue that could occur when rendering a report with a table that was missing `table` tags
+* Fixed a report generation endpoint that did not properly redirect when the report did not exist
+* Fixed sanitizing the identifier on log entries
+* Fixed an issue that could occur with `filter_bhe_findings_by_domain` when domain SID or BloodHound `environment_id` were empty
+* Fixed an edge case where a single contact on a client or project could be flagged as not the primary contact
+* Fixed an issue that prevented report archives from being created
+* Fixed the table caption "Set Bookmark" command in the editor being available when it should not be
+
+### Security
+
+* Restored the HttpOnly flag to cookies
+* Restricted collab-server inspector to localhost for development environments
+
+## [6.3.0] - 10 April 2026
+
+### Added
+
+* **Operation Log Evidence Linking**: Added support for linking evidence to individual operation log entries (Closes #132; Closes #831)
+  * New `OplogEntryEvidence` model to create many-to-many relationships between log entries and evidence
+  * New GraphQL `linkOplogEvidence` action to attach evidence via API
+  * New web form (`OplogEvidenceCreate` view) to attach evidence through the UI
+  * Evidence appears in a dedicated section within each log entry, with friendly names and direct links to the original evidence
+  * Automatic "evidence" tag applied when evidence is linked to an entry
+* **Operation Log Terminal Recordings**: Added support for uploading and playback of Asciinema terminal session recordings (.cast and .cast.gz files) (Closes #831)
+  * New `OplogEntryRecording` model to store a single terminal recording per log entry
+  * New GraphQL `uploadOplogRecording` action for base64-encoded file uploads via API
+  * New GraphQL `downloadOplogRecording` action to retrieve recordings and metadata
+  * New Django views for recording upload, deletion, and download with file serving and inline playback support
+  * Support for Asciinema player integration for viewing recordings directly in the log entry's details pane
+  * Automatic "recording" tag applied when a recording is uploaded
+* **Automatic Tag Management for Log Entry Features**: Evidence linking and terminal recordings automatically apply and remove tags
+  * `evidence` tag added when first evidence is linked, removed when the last evidence is unlinked
+  * `recording` tag added when a recording is uploaded, removed when the recording is deleted
+  * Tags can be used for filtering log entries and visual identification
+* **Passive Voice Detection**: Added support for performing passive voice identification inside the collaborative editor (PR #796)
+  * Ghostwriter now hosts a small local copy of the spaCy language model for text analysis
+  * Select "Check Passive Voice" in the collaborative editor to examine text and highlight instances of passive voice
+  * See the wiki for more details and an explanation for how to change the model's language
+* **Build a Narrative Outline from Log Entries**: Construct an outline for a report narrative based on tagged log entries (Closes #863)
+  * This is useful for quickly generating a narrative outline to kickstart a report draft
+  * Added a button to the collaborative editor to insert a narrative outline based on activity logs
+  * The action includes any log entries tagged with `evidence` or `report`
+  * Extended the global report configuration to include a field for specifying additional tags
+    * Includes support for partial tags—e.g., `cred*` will match `creds` or `credentials`.
+  * Each line includes the start date and time (assumes UTC), tool used, target, and comments
+  * The action also inserts evidence objects below each line for any evidence linked with that entry
+  * Pairs nicely with Ghostwriter's external tools, `mythic_sync` and `cobalt_sync`
+  * Big thanks to @C0KERNEL who created the initial PoC of this
+
+### Changed
+
+* **New User Interface for Operation Logs**: Replaced the table view for operation logs with two pane interface (Closes #831)
+  * New interface is similar to those used by many email clients
+  * Log entries appear on the left-side with at-a-glance information
+  * Details appear on the right-side in a details pane
+  * Details pane includes dedicated sections for attaching evidence and uploading terminal recordings
+* **Text Evidence Previews**: Text evidence now has previews in the collaborative editor like image evidence
+* **Pasting Images into Collaborative Editor**: You can now paste an image file or screenshot in your clipboard into a collaborative editor field
+  * The paste will automatically trigger the modal window for uploading your evidence
+  * Your filename will be the default friendly name for the upload
+* **Updated Ghostwriter CLI Binaries**: Updated the pre-built Ghostwriter CLI binaries to v1.0.0
+  * Review the Ghostwriter CLI CHANGELOG for complete notes
+  * Going forward, we recommend all users use the new published container images for easier updates
+  * Existing installations will need to migrate some files
+    * Copy the _ssl/_ directory to the _ghostwriter/_ directory inside your operating system's data file directory
+    * Also copy any custom settings files from _config/settings/production.d_ to _ghostwriter/settings/_
+  * Ghostwriter CLI can be used with `--mode local-prod` to keep the old behavior of using a local copy of Ghostwriter's code
+    * You will need to do this if you are using a customized version of the codebase
+* Report names in the sidebar now also include the parent project's codename to aid in identification
+
+### Fixed
+
+* Fixed an error that occurred in local development environments related to trying to connect to nginx (Closes #847)
+
+### Security
+
+* As we allow more user-editable content to be rendered in the DOM, we have implemented stronger controls to prevent JavaScript injection
+  * Updated the allowed HTML attributes to be more targeted
+  * Added sanitization to activity log entries that support rich text (`comments` and `description`)
+  * Added `DOMPurify` to the project for an extra layer of security and client-side sanitization
+
+## [6.2.13] - 8 April 2026
+
+### Changed
+
+* Adjusted substitution for `.ref` and `.caption` to be forgiving of extra spaces before/after the `.`
+  * This resolves a potential syntax error when rendering a report that could be difficult to identify
+* Adjusted font color of in-focus evidence preview objects for better contrast
+
+## [6.2.12] - 6 April 2026
+
+### Added
+
+* **Extra Field Ordering**: Added a `position` field to extra fields to enable custom ordering
+  * Admins can now set an order for their extra fields
+  * Ordering impacts the display of extra fields in all locations
+* **Exposures Now Available for BHE Reporting**: Added `exposures` to the domain data for BHE tenants
+  * This is a new key in the domain data pulled from all BHE tenants
+  * The key includes data like the domain's calculated exposure percentage
+
+## [6.2.11] - 2 April 2026
+
+### Added
+
+* **Ordering Based on Project Role Assignments**: Added a `position` field to `ProjectRole` to order team members
+  * Team members will now order by their role's position and then by their name
+  * Admins can set the position for each role in the admin console
+  * Ordering applies to the project dashboard and the ordering of the team in the report data
+
+## [6.2.10] - 27 March 2026
+
+### Changed
+
+* Updated TinyMCE to work better with Ghostwriter's dark mode using a new dark-mode skin
+
+### Fixed
+
+* Fixed TinyMCE editors not initiating correctly for the "Results" field on objectives when adding new forms
+* Fixed TinyMCE editors sometimes appearing with a very short height and needing to be resized
+
+## [6.2.9] - 23 March 2026
+
+### Changed
+
+* Includes some code clean-up and general improvements to styles in dark mode
+
+### Fixed
+
+* Fixed outbound and inbound trust information not being collected from BloodHound Enterprise
+
+## [6.2.8] - 12 March 2026
+
+### Added
+
+* Implemented status and assignment fields for observations to match the functionality for findings (PR #840; Closes #601)
+  * These changes make observations on reports work very similarly to findings on reports
+  * Observations on reports now have a status for tracking if they need editing or are complete
+  * The `assigned_to` field is now fully implemented and displayed for tracking
+* Added the "primary" status to client contacts to be consistent with project contacts (PR #841; Closes #789)
+  * You can now flag a point of contact on a client as the primary contact
+  * If a client contact is set as the primary on a client and is then added to a project for that client, they will inherit their primary status on the project
+  * If there is already a primary contact on the project, the incoming client contact will not be flagged as the primary for the project
+  * Users can always edit the primary contact on the project
+
+### Changed
+
+* Clients and projects must now have one contact flagged as the primary contact (unless there are no contacts)
+  * If there is only one contact, that lone contact will automatically become the primary contact
+  * If a user is adding two contacts (going from zero to two), the form will now require they pick one as the primary
+  * If a user tries to delete the current primary, they will need to select a new primary unless there are no more contacts
+  * This change improves consistency and will allow reports to reliably reference the primary contact
+
+## [6.2.7] - 9 March 2026
+
+### Added
+
+* Added the option to set a default CVSS calculator version in the global report configuration
+* Each user's last selected CVSS version is now tracked in their browser's local storage
+  * This selection will take priority over the global default selection
+
+### Fixed
+
+* Fixed user profile pictures appearing distorted when the uploaded image is not a square
+
+## [6.2.6] - 5 March 2026
+
+### Added
+
+* Added a "Download" link to the admin console for models with a file field — report templates, user profiles, and evidence
+
+### Changed
+
+* Updated PowerPoint slide generation to attempt to intelligently adjust for different slide layouts (Fixes #836)
+  * If shape indices are non-sequential (can happen when shapes are deleted), Ghostwriter will fallback to searching
+  * If there are multiple placeholders, it will try to find the first with the content type (7 or 17)
+  * Ghostwriter now uses the final layout for the final slide instead of expecting it at position 12
+
+### Fixed
+
+* Fixed file field links in the admin console returning a 404 Not Found after recent changes to media links (Fixes #837)
+
+## [6.2.5] - 3 March 2026
+
+### Changed
+
+* Changed PowerPoint title slide generation to detect subtitle placeholders for more intelligent subtitle placement
+* Document type is now a required field for the report template form to prevent issues with that field being forgotten
+
+### Fixed
+
+* Fixed PowerPoint generation failing with some templates when slide layout content did not match expectation (Fixes #836)
+* Fixed domain and server history not properly showing the "Checked Out By" column
+* Fixed updating a domain or server checkout setting the user value to null
+* Fixed some contrast issues with the objectives table and dark mode
+
+## [6.2.4] - 24 February 2026
+
+### Added
+
+* Added local copies of fonts used with the user interface and their associated license information
+  * This makes it possible for the fonts to be used with offline Ghostwriter servers
+
+### Changed
+
+* Removed fonts loaded from Google Fonts to fix load times for offline systems (Fixes #823)
+* Changed the `Report` model's project ID field to no longer allow null values
+  * This could allow the creation of an "orphan" report with no associated project when created via the GraphQL API
+
+### Fixed
+
+* Fixed client logos not showing properly on client dashboards
+* Fixed issue with the `last_update` column preventing creation of a report via the GraphQL API (Fixes #828)
+
+## [6.3.0-rc1] - 24 February 2026
+
+### Added
+
+* Added support for performing passive voice identification inside the collaborative editor
+  * Ghostwriter now hosts a small local copy of the spaCy language model for text analysis
+  * Select "Check Passive Voice" in the collaborative editor to examine text and highlight instances of passive voice
+  * See the wiki for more details and an explanation for how to change the model's language
+* Added fonts formerly imported from Google Fonts to the local codebase to support systems without network connections (Fixes #823)
+
+### Changed
+
+* Updated the pre-built Ghostwriter CLI binaries to v1.0.0
+  * Review the Ghostwriter CLI CHANGELOG for complete notes
+  * Going forward, we recommend all users use the new published container images for easier updates
+  * Existing installations will need to migrate some files
+    * Copy the _ssl/_ directory to the _ghostwriter/_ directory inside your operating system's data file directory
+    * Also copy any custom settings files from _config/settings/production.d_ to _ghostwriter/settings/_
+  * Ghostwriter CLI can be used with `--mode local-prod` to keep the old behavior of using a local copy of Ghostwriter's code
+    * You will need to do this if you are using a customized version of the codebase
+
+## [6.2.3] — 5 February 2026
+
+### Changed
+
+* Changed the code block behavior in the Tiptap editor to allow highlighting inside code blocks (PR #811; Thanks to @BinaryScary)
+* The Project and Report models are now valid models for the `setTags` GraphQL mutation (PR #810; Thanks to @domwhewell-sage)
+
+### Fixed
+
+* Fixed image borders not disabling properly when the setting was unchecked (PR #812)
+* Fixed missing vendor names in VirusTotal results following API changes
+
+## [6.2.2] - 22 January 2026
+
+### Added
+
+* Added a sample BloodHound report to the DOCS/sample_reports directory
+* Added severity color values to BloodHound Enterprise findings data
+  * These values mirror the color values provided for Ghostwriter findings (e.g., `color`, `color_rgb`, and `color_hex`)
+  * You can use these values in report templates with Jinja2 templating lie `cellbg`
+  * Examples are in the sample BloodHound report document
+
+### Fixed
+
+* Added handling for an error that could occur when fetching BloodHound domains with an Azure tenant reported as an available domain
+
+### Security
+
+* Removed an unneeded view that could allow someone to download a file without the proper permissions if they knew the report ID and full filename
+
+## [6.2.1] - 13 January 2026
+
+### Changed
+
+* Optimized database queries behind client dashboards to improve page load times for clients with many projects
+
+### Fixed
+
+* Fixed some BloodHound domain queries taking too long to complete and causing a timeout error
+  * Added the `?counts=false` parameter to domain queries to drop unnecessary calculations
+  * Also, increased the response timeout from 10s to 30s for occasions there may be extra latency
+* Fixed an issue with cloud infrastructure descriptions that could cause an error
+
+## [6.2.0] - 8 January 2026
+
+### Added
+
+* Added support for inserting footnote objects in the collaborative editor (PR #783)
+  * Footnotes will appear in the editor as they do in Word (e.g., as superscript numbers)
+  * The text you set for your footnote will appear in Word as your footnote text
+  * We recommend adding Word's _Footnote Reference_ and _Footnote Text_ styles to templates, but this is not required
+
+### Changed
+
+* Updated Docker files to remove some of the exposed ports (Fixes #768)
+  * Removing the exposed ports addresses issues some individuals experienced with Docker v20
+  * The removal also generally improves security by closing ports that do not need to be exposed by default
+  * This change may adversely affect anyone who uses the PostgreSQL port for remote administration
+  * Users may choose to re-expose ports, but you can execute `pgsql` commands inside the container
+  * This is a precursor to a larger change coming that introduces published Docker images
+* Adjusted the dark mode colors for inactive tabs to improve blending
+
+## Fixed
+
+* Fixed some fields not appearing with a WYSIWYG editor when adding them as a new formset
+
+## [6.1.1] - 15 December 2025
+
+### Added
+
+* Added report filters for managing business day calculations (PR #780 from @DeveloperMarius; Closes #775)
+  * `business_days` calculates how many business days are between two dates (e.g., 1 Dec - 12 Dec, 2025 returns `10`)
+  * `to_datetime` accepts a date string and format string to create a date object to enable further date calculations
+
+### Changed
+
+* Updated some dependencies to use the latest (PR #786)
+
+### Fixed
+
+* Fixed an issue that could cause the collaborative editor to not load (PR #784)
+* Fixed an incorrect count on the project dashboard for the number of computers in a BloodHound domain collection
+
+## [6.1.0] - 5 December 2025
+
+### Added
+
+* Added support for uploading a logo for a client
+  * Ghostwriter now replaces any image in your template with the client logo if you have set the alt text to `[CLIENT_LOGO]`
+  * The client logo will keep the exact dimensions and placement as the template image
+* Added a menu to the editor with new options
+  * Added options to convert selected text to lowercase or uppercase
+  * Added a command to insert the logo of the project's client
+* Added a new collaborative notes field on the project dashboard
+  * This field allows project members to take shared notes about the project
+  * The notes are saved automatically and can be edited by multiple users simultaneously
+  * Find this field under the "Collab Notes" tab
+* Added a `downloadEvidence` query to the GraphQL API
+  * This provides a mechanism for programmatically pulling down an evidence file
+  * The query can return a download URL or a base64-encoded blob
+  * You can visit the download URL with a valid login session or decode the base64
+* Added an all-new integration with BloodHound
+  * Thank you [@zinic](https://github.com/zinic) for the initial implementation of the BloodHound client!
+  * This integration allows you to import data and findings from BloodHound into Ghostwriter
+  * The integration supports both Community Edition and Enterprise versions of BloodHound
+  * You can find the integration under the "BloodHound" tab in the project dashboard
+  * Ghostwriter supports a global BloodHound configuration for your instance and per-project configurations
+    * Configure a BloodHound instance globally or use a different instance for each project
+  * Review the wiki for more information: [https://www.ghostwriter.wiki/features/bloodhound-integration](https://www.ghostwriter.wiki/features/bloodhound-integration)
+
+### Changed
+
+* Upgraded `allauth` to provide the best support for SSO providers and enable new options for MFA
+  * Moved to a new MFA management page
+  * Implemented WebAuthn for future support for Passkey authentication
+  * Note: These changes require migrating existing TOTP devices to this new version with `./ghostwriter-cli migrate_totp`
+* Changed the `note` fields on most models to `description` to better reflect their purpose
+  * This includes models like Domain, Server, Finding, Observation, Project, Client, and others
+  * These fields were meant to be used as descriptions of the object, but the `note` naming was confused with other note-taking features added to Ghostwriter over time
+  * This is a breaking change for any references to these in existing report templates or scripts
+* Converted the `{{.caption}}` keyword to a new editor object to make it easier to use and see in the collaborative editor
+  * This continues what we started with evidence previews as objects in the editor
+  * You can now set the caption text and a custom reference ID for bookmarks in the object
+  * This replaces the need to use a line like `{{.caption REF_ID}} Caption text`
+* We have hidden the legacy "Notes" sections in the dashboards
+  * Like the change to the old `note` fields, this change is to reduce confusion with the new collaborative notes feature
+  * The feature was not widely used, and the collaborative notes feature provides a better experience
+  * The sections will remain visible for any existing projects with content in the notes
+  * New projects will not see the notes section
+
+## [6.0.6] - 20 November 2025
+
+### Changed
+
+* Updated the pre-built Ghostwriter CLI binaries to v0.3.0
+
+### Fixed
+
+* Fixed tables not using the full width in Word documents (PR #742)
+  * Adjusted table width from `auto` to `pct` (percentage) and 100%
+* Fixed text alignment set in content edited with the old TinyMCE editor not being applied in Word documents (PR #743)
+
+## [6.0.5] - 16 October 2025
+
+### Added
+
+* Added the option to color the background of table cells (PR #717)
+  * This applies to cells in rows not flagged as header rows
+
+### Changed
+
+* Changed the finding form in the admin panel to include the CVSS vector field (PR #715; Fixes #704)
+
+### Fixed
+
+* Fixed certain invalid characters that could break report generation if copied and pasted into the editor (PR #711; Fixes #709)
+* Fixed some HTML `span` elements being styled with a red font color (PR #714; Fixes #703)
+* Fixed invalid CVSS vector strings from causing the finding form to not render properly (PR #710; Fixes #705)
+* Fixed the configuration values for health checks on disk usage and minimum memory not being imported in the production YAML (PR #699; thanks to @smcgu for flagging)
+* Fixed templates with references to white cards failing linting
+* Fixed the Tiptap editor automatically converting strings into hyperlinks when it thinks they are URLs (PR #720)
+  * PR #673 attempted to disable this behavior, but it was not fully effective due to Tiptap having two paths for how it handles pasted text
+  * Based on feedback, this is the preferred behavior for most users, but we understand some users may want to re-enable it
+  * We will explore making this configurable in a future release
+
+## [6.0.4] - 12 September 2025
+
+### Added
+
+* Added GraphQL endpoints, `*_by_tag`, for several models that get all objects that include the tag passed in as the query's parameter (PR #693)
+  * Results are restricted to objects to which the user has access
+  * Included models are limited to OplogEntry, Finding, Observation, ReportedFinding, and ReportedObservation for now
+
+### Fixed
+
+* Fixed an error that occurred when saving the contents of a custom field in the collaborative editor when more than one person had to editor open (PR #694)
+* Fixed an issue with saving a newly added JSON field (PR #694)
+* Fixed code blocks not rendering inside Word documents if they were a part of a list item (PR #694)
+
+## [6.0.3] - 10 September 2025
+
+### Added
+
+* Added font color options back to the collaborative editor (PR #662)
+  * You can now change the font color using the color picker
+  * The color picker supports selecting from a palette of colors or entering custom hex or RGB values
+
+### Changed
+
+* Increased session timeout for evidence uploads to 24 hours (up from 15 minutes) (PR #686)
+  * This addresses uploads expiring when users fill out the form but then do not submit the form until later
+  * This change affects evidence uploads for the collaborative editor
+* Removed some redundant buttons from the observations list view (PR #685)
+* Improved the collaborative editor's modals (PR #683)
+  * The fields now auto-focus
+  * Pressing _Enter_ will now submit the modal form
+
+### Fixed
+
+* Fixed handling of the JSON content in JSON extra fields with the collaborative editor (PR #679)
+* Fixed the temporal and environmental scores not working properly with the CVSS v3 calculator in the collaborative editor (PR #680; Fixes #670)
+* Fixed an issue with bookmark/cross-references for headers in Word documents (PR #691)
+
+## [6.0.2] - 8 August 2025
+
+### Changed
+
+* Changed the Tiptap editor to disable itself when users lose their connection to the collaborative editing server
+  * This change prevents users from making changes to the document when they are not connected to the server
+
+### Fixed
+
+* Fixed the missing evidence button in the Tiptap editor when editing extra fields on reports
+* Fixed some extra fields on findings not saving correctly with collaborative editing
+* Fixed the "sanitize" action on activity logs not working well with large logs
+
+## [6.0.1] - 31 July 2025
+
+### Added
+
+* Added a _postgres.conf_ file for the PostgresSQL container and database
+  * This file allows you to customize the PostgreSQL configuration for your Ghostwriter instance
+  * The file is located in the _compose/production/postgres_ directory and can be modified as needed
+* Added the option to display a global banner at the top of any page for announcements
+  * The banner has a configurable title and message content
+  * You can optionally include a link that will appear as "Learn more" below the message
+  * There is an expiration date to make the banner stop displaying after a specified date and time
+  * There is a "public" flag to allow the banner to be displayed to unauthenticated users on the login page
+  * If a user dismisses the banner, the banner will stay hidden until the banner's content changes
+    * Ghostwrtier tracks the dismissal in the browser's local storage, so the dismissal will not persist across browsers or devices
+  * Added a documentation page for the banner configuration
+
+### Changed
+
+* Changed the default `MAX_CONN_AGE` value to `0` per Django's recommendations for ASGI applications
+* The `MAX_CONN_AGE` value is now controlled by a `POSTGRES_CONN_MAX_AGE` environment variable
+* Increased PostgreSQL's `max_connections` to `150` (up from `100`) to help accommodate increased concurrent connections
+  * This may help with the increased connections that came with the new collaborative editing feature in Ghostwriter v6.0.0
+* Updated the pre-built Ghostwriter CLI binaries to v0.2.27
+    * This update adds a `POSTGRES_CONN_MAX_AGE` value to the _.env_ file to control the maximum age of PostgreSQL connections
+* Updated the Ghostwriter CLI binaries to v0.2.28
+  * This update adds the collaborative editing and development frontend servers to the `running` and `logs` commands
+
+### Fixed
+
+* Fixed a permissions issue with the `uploadEvidence` GraphQL mutation that prevented users from uploading evidence files unless they were a `manager` or `admin`
+* Fixed collaborative editing not working for boolean custom fields
+* Fixed permission errors that could occur when trying to add an observation from a search result without permission
+
+## [6.0.0] - 23 July 2025
+
+### Added
+
+* Introduced collaborative editing server and client-side components for real-time form collaboration
+  * This feature allows multiple users to edit the same form or field simultaneously
+  * The collaborative editing experience applies to report fields, findings, and observations for now
+  * We will expand this feature to other areas of Ghostwriter in future releases
+* Added new JavaScript/TypeScript frontend infrastructure with React components and GraphQL integration
+* Updated software dependencies to the latest versions, including Django and PostgreSQL
+  * **Important**: Upgrading an existing Ghostwriter v5 installation will require upgrading the database to v16
+    * Make a backup of your database before upgrading (`./ghostwriter-cli backup` or a server snapshot)
+    * Run `./ghostwriter-cli down`
+    * Update your release (e.g., `git pull`)
+    * Run`./ghostwriter-cli pg-upgrade`
+    * Run `./ghostwriter-cli containers build`
+
+### Changed
+
+* Replaced the TinyMCE WYSIWYG editor with the new Tiptap editor for collaborative writing
+  * TinyMCE is still used in some parts of Ghostwriter that are outside the collaborative editing experience
+  * This new editor looks different, but it offers all the same formatting features
+  * The new editor supports collaborative editing, allowing multiple users to edit the same document simultaneously
+  * You will no longer see a "Save" or "Submit" button as your work is saved automatically as part of the collaborative editing experience
+  * You can now insert image evidence and see a preview of it inline with your text as you work
+* Updated the Ghostwriter CLI binaries to v0.2.26
+  * These binaries include a new `tagcleanup` command to help you clean up unused or duplicated tags in your Ghostwriter instance
+
+## [5.0.12] - 18 July 2025
+
+### Added
+
+* Added a `createUser` mutation to the GraphQL API to allow creating new users
+  * This mutation is useful for creating new users without needing to use the web interface
+  * The mutation requires the `email`, `username`, `password`, `name`, and `role` fields
+  * Only admins can create new users via this mutation
+  * If you choose to allow managers to create users, the mutation will not allow them to create users with the manager or admin roles
+
+## [5.0.11] - 3 July 2025
+
+### Fixed
+
+* Fixed an issue that prevented a new user from configuring a TOTP device on login when `Require 2FA` was checked for their account
+
+## [5.0.10] - 18 June 2025
+
+### Changed
+
+* Changed the findings library filter for findings on reports to clear up confusion (Fixes #622)
+  * The "Return only findings on reports that started as blank findings" used to attempt to filter findings based on the `title` field
+  * That filtering was incorrect and led to results that did not align with the filters intent and tooltip
+  * The filter will now further filter the results to show only findings that started as blank templates
+
+### Fixed
+
+* Fixed disallowing signups not working for the general signup form (i.e., not the SSO signup)
+
+## [5.0.9] - 3 June 2025
+
+### Added
+
+* Added an option to exclude archived reports in the report library when viewing completed reports
+* Added observation and report evidence relationships for reports in the GraphQL schema
+
+### Changed
+
+* The archive task will now use the selected default templates when generating archived reports
+* The archive report action will now display a confirmation prompt to confirm the action
+
+### Fixed
+
+* Fix archive task selecting reports to archive incorrectly
+  * It should now properly archive reports of completed projects that are 90 days (default) past the project end date
+  * It will now catch and log errors in the archive task and continue with other reports (Fixes #617)
+* The archiving task now stops on the first exception
+* Fixed the archive task not deleting evidence files (Fixes #618)
+
+
+## [5.0.8] - 30 May 2025
+
+### Added
+
+* Added options to show and hide columns in the findings and domains libraries
+  * This change allows you to customize the columns displayed in the libraries to suit your needs
+  * Selections are preserved in your browser's local storage, so they will not persist across browsers or devices
+
+### Changed
+
+* Table sorting will now be preserved between page loads and visits
+  * This change allows you to sort a table and have the sorting remain when you navigate away from the page and return
+  * The sorting is stored in your browser's local storage, so it will not persist across browsers or devices
+
+## [5.0.7] - 23 April 2025
+
+### Changed
+
+* Added auto-complete for tags in filter forms (e.g., domain and finding libraries)
+* Added the Tags column back to the tables for the domain and finding libraries
+* Made changes to optimize Word document generation
+  * This is part of an ongoing effort to optimize these workflows to reduce the time it takes to generate reports, especially those with large tables (Issue #585)
+
+### Fixed
+
+* Fixed default values not populating for extra fields on observations (PR #604 by @rteatea)
+
+## [5.0.6] - 04 April 2025
+
+### Added
+
+* Added a new "Quickstart" card to the homepage dashboard to help guide new users
+  * The card includes general information tog et started, links to the wiki, and a link to the Ghostwriter community
+  * Users can hide the card with the button on the card
+
+### Changed
+
+* Numerous user interface and user experience (UI/UX) enhancements
+* Reduced table sizes to improve readability
+  * Some table columns (e.g., notes and additional information unneeded for sorting) have moved into informational modals
+  * You can open the modals by clicking the "i" icon in the table row
+* Library filters are now inside collapsible sections to reduce clutter
+  * If you prefer the filters always be accessible, their collapsed status is now tracked in your browser's local storage
+  * If you open a filter, all filters will be open by default until you close them
+* Selecting a report to edit from the sidebar will no longer redirect you to the report
+  * We added the redirect to remove a click long ago, but this made it difficult to manage multiple reports
+  * Now, selecting a report will swap reports and allow you to continue selecting findings in the library without a redirect
+* Modified the homepage dashboard to show more relevant information and provide user guidance
+  * We will continue to improve the homepage dashboard in future releases based on feedback
+
+### Fixed
+
+* Fixed report template "Upload Date" changing whenever the template was updated without changing the template file
+
+## [5.0.5] - 14 March 2025
+
+### Added
+
+* Added a setting on report templates to control the width of evidence files for Microsoft Word reports (PR #597)
+  * The default is still Word's standard 6.5" width
+  * The setting allows you to adjust the width to fit your needs
+
+## [5.0.4] - 13 March 2025
+
+### Added
+
+* Added a filter to the findings library to show only findings on reports that have not been created in or cloned to the library
+  * While filtering with "Search findings on reports" you can select "Return only findings on reports & not in the library"
+
+### Fixed
+
+* Fixed table sorting on activity logs
+
+## [5.0.3] - 28 February 2025
+
+### Added
+
+* Added objective result fields to the GraphQL schema and reporting engine
+  * Objectives now have `result` and `result_rt` fields that can be used in report templates
+  * The `result` field can now be updated via the GraphQL API
+
+## [5.0.2] - 24 February 2025
+
+### Fixed
+
+* Fixed an issue with creating clients and projects when providing optional form data (e.g., invites, contacts, assignments)
+
+## [5.0.1] - 13 February 2025
+
+### Added
+
+* Added a finding type label below the finding's title on the finding details page
+* Added links to profile pages for users from the project library
+* Added a table of active project assignments to the user profile page
+  * This table is viewable by the user and managers
+
+### Fixed
+
+* Fixed an error that could occur when trying to edit an observation without permissions
+
+## [5.0.0] - 7 February 2025
+
+### Added
+
+* Managers now have the ability to invite users to view a client or project from the client and project dashboards
+* Added the `DATABASE_URL` variable to the Django container's environment (Fixes #578)
+
+### Changed
+
+* This release changes role-based access controls in the web UI to match the GraphQL API's stricter controls
+  * Users with the standard `user` role will no longer be able to see or access projects to which they are not assigned
+  * These users will be able to see a client has other past or current projects, but will be unable to see the details of those projects
+  * Admins and managers can grant a user access to a client or project by inviting them from the client or project dashboards
+* Fixed the WYSIWYG editor not working for custom Rich Text fields added to the log entry model
+* Added tags to the autocomplete results when searching for findings and observations (Closes #582)
+* Added autocomplete to client and project filters
+
+## [4.3.11] - 8 January 2025
+
+### Changed
+
+* Updated the pre-built Ghostwriter CLI binaries to v0.2.22
+
+## [4.3.10] - 3 January 2025
+
+### Added
+
+* Added a `HASURA_GRAPHQL_SERVER_HOSTNAME` for the DotEnv file to allow for setting the Hasura server hostname (Fixes #566)
+  * This is available for Kubernetes deployments (see issue #566)
+  * For all other deployments, the Hasura server hostname should be left set to `graphql_engine` by default
+
+### Changed
+
+* The linter now checks if the list styles are of type `PARAGRAPH` in the Word template
+* The archived reports page now displays the project name for each report to help with identification
+* Updated the pre-built Ghostwriter CLI binaries to v0.2.21
+
+## [4.3.9] - 10 December 2024
+
+### Changed
+
+* Evidence previews for custom fields and evidence detail pages now display evidence at 6.5" wide to mimic the standard full-width seen in a Word document
+
+### Fixed
+
+* Fixed an issue that could cause improper casing for the first word in a caption
+
+## [4.3.8] - 6 December 2024
+
+### Added
+
+* Added buttons to jump to a selected template from the report dashboard
+
+### Changed
+
+* Enabled pasting with formatting in the WYSIWYG editor
+  * This change allows you to paste formatted text from other sources (e.g., Word documents) into the editor
+  * This caused issues in the past when pasting from Word, some terminals, and some websites, but the reporting engine seems to handle the formatting well now
+  * **Note:** Pasting with formatting may not work as expected in all cases, so please check your pasted content in the editor before generating a report
+* Increased the auto-complete list's maximum items from 10 to 20 to show more evidence files
+* Using the "Upload Evidence" button in the editor now pushes a `ref` version of the auto-complete entry to the auto-complete list upon successful upload
+
+### Fixed
+
+* Fixed activity log filtering not working correctly when very large log entries were present (PR #558)
+
+## [4.3.7] - 25 November 2024
+
+### Fixed
+
+* Fixed forms not accepting decimal values for extra fields (PR #554)
+* Fixed cross-references not working when the reference name contained spaces (PR #556)
+
+## [4.3.6] - 14 November 2024
+
+### Added
+
+* Added support for table captions in the WYSIWYG editor (PR #547)
+  * Caption text can be customized by right-clicking on the table > Table Properties > General > Show caption
+* Added report configuration options for figure and table caption placement (above or below) for Word
+
+### Changed
+
+* Production deployments now default to only exposing PostgreSQL and Hasura ports to internal services (PR #551)
+  * This change is to improve security by limiting the number of exposed ports on the server
+  * If you need direct access to PostgreSQL or Hasura, you can adjust the Docker Compose file to expose the ports on the host system or run a utility like `psql` inside the container
+
+### Fixed
+
+* Fixed observations not being cloned when cloning a report (PR #548)
+* Fixed lists being styled as _List Paragraph_ in Word instead of with user-defined _Bullet List_ or _Number List_ styles (PR #550)
+
+## [4.3.5] - 30 October 2024
+
+### Changed
+
+* The `added_as_blank` attribute for findings is now included in the template linter
+
+### Fixed
+
+* Fixed `false` values appearing as `""` in the report template context after release v4.3.4
+
+## [4.3.4] - 24 October 2024
+
+### Changed
+
+* Adjusted the duplicate IP address checks for cloud servers on a project to make them more robust to catch more edge cases
+
+### Fixed
+
+* Fixed an issue with creating a new cloud server on a project
+
+## [4.3.3] - 21 October 2024
+
+### Added
+
+* Added display for the temporal and environmental scores on the CVSS v3.1 calculator (Closes #536)
+* Added a `cvss_data` key to the report context that includes the CVSS data for each finding
+  * The key is a list that includes four items: the CVSS version, score(s), severity, and your configured color for the severity
+  * The score and severity data includes the temporal and environmental scores for CVSS v3.1, so those scores, severities, and colors are lists (base, temporal, environmental)
+  * The data is available for use in the report template
+
+### Fixed
+
+* Fixed values of zero (e.g., `0` or `0.0`) displaying as "No Value Set" for extra fields (Closes #541)
+* Fixed a minor style issue with the sidebar
+
+## [4.3.2] - 30 Sep 2024
+
+### Added
+
+* Add a `severities` key to the report context that includes a list of all severity categories in the database (Closes #427)
+  * Each severity category includes the category's name, color as a hex value, color as an RGB value, color as a hex tuple, and the category's weight
+  * Each entry also has a `severity_rt` RichText object  for Word that places the severity in a font color that matches the severity's color
+    * This object is identical to the `severity_rt` object on findings
+
+### Changed
+
+* Reworked the CVSS calculators on findings to allow switching between CVSS v3/3.1 and v4 (Closes #232, #356, #387, and #509)
+  * Changes include the addition of the "modified" metrics like temporal, environmental, threat, and supplemental sections
+* Changed autocomplete suggestions in the WYSIWYG editor to no longer be case-sensitive (Fixes #440)
+
+### Fixed
+
+* Fixed archive report generation failing due to the Word template used for the PowerPoint report (PR #528)
+
+## [4.3.1] – 25 Sep 2024
+
+### Added
+
+* Added a `replace_blanks` filter to the report template engine to replace blank values in a dictionary with a specified string
+  * This filter is useful when sorting a list of dictionaries with an attribute that may have a blank value
+* Added an option in the change search in the findings library to search findings attached to reports (Closes #400)
+  * Instead of matches from the library, the search will return results for findings attached to reports to which the user has access
+
+### Changed
+
+* Changed the serializer for report context to replace null values with a blank string (`""`) to help prevent errors when generating reports
+  * **Note:** This change may affect templates that rely on null values to trigger conditional logic, but most conditional statements should not be affected
+  * **Example:** The condition `{% if not X %}` will evaluate to `True` if `X` is `None` or `""`
+* Changed the report form to allow users with the `admin` or `manager` roles to change the report's project (Closes #368)
+  * This change allows a report to be moved from one project to another (e.g., you make a copy for a follow-up assessment)
+  * This feature is only available to users with the `admin` or `manager` roles to prevent accidental data leaks
+
+### Fixed
+
+* Fixed an edge case with the Namecheap sync task that could lead to a domain remaining marked as expired after re-purchasing it or renewing it during the grace period
+
+## [4.3.0] – 23 Sep 2024
+
+### Added
+
+* Added two mutations to the GraphQL API to support uploading new evidence files and report template files (Closes #230)
+* Added a new adapter for handling authentication for Single Sign-On (SSO) providers
+  * The adapter fills-in a nearly full profile for any new accounts (full name, email address, username)
+  * Usernames for new accounts will default to the first half of the email address
+  * If an existing account has the same email address, the accounts will be linked
+  * Review the wiki for more information: [https://www.ghostwriter.wiki/features/access-authentication-and-session-controls/single-sign-on](https://www.ghostwriter.wiki/features/access-authentication-and-session-controls/single-sign-on)
+* Added support for loading customized config files
+  * These are files you can use to modify settings normally found in _/config/settings/base.py_ and _production.py_
+  * Admins can make changes to the custom config files without worrying about the changes needing to be stashed prior to pulling an update
+  * Review this section of the wiki for information: [https://www.ghostwriter.wiki/features/access-authentication-and-session-controls/single-sign-on#configuring-an-sso-provider](https://www.ghostwriter.wiki/features/access-authentication-and-session-controls/single-sign-on#configuring-an-sso-provider)
+* Added support for a JSON field type for custom fields
+* Added a "Tags" column to the domain and server library tables
+
+### Changed
+
+* Updated the `django-allauth` module used for authentication and SSO
+  * **Important:** This change impacts anyone currently using SSO with Azure
+  * The `azure` provider is now `microsoft` and SSO configurations will need to be updated
+* Changed the cloud infrastructure monitoring task to also check auxiliary IP addresses when determining if a cloud host is tracked in a project
+* Cloud hosts tracked on a project no longer require a unique IP address
+  * A warning is displayed if a cloud host is tracked on a project with multiple hosts sharing the same IP address
+* Changed filtering on tags to be case-insensitive
+* On the report dashboard, clicking an autocomplete suggestion for a finding or observation will now add the item to the report
+
+### Fixed
+
+* Fixed spaces disappearing after Microsoft Word cross-references placed at the beginning of a new line or paragraph
+
+### [4.2.5] - 7 August 2024
+
+### Changed
+
+* Changed filtered activity logs to sort by the start date instead of relevancy rank
+
+### Fixed
+
+* Fixed activity logs not loading additional entries when scrolling to the bottom of the page
+* Fixed an issue that could cause an error when importing an activity log csv file with one or more individual cells with content exceeding 128KB
+
+### [4.2.4] - 29 July 2024
+
+### Changed
+
+* Changed the "Inline Code" formatting to work for blocks of text in the WYSIWYG editor (Closes #337)
+  * You can now use the "Inline Code" formatting to apply a monospace font to a block of text in the WYSIWYG editor
+  * This change allows you to apply the monospace font to multiple lines of text without needing to use the TinyMCE "Code Sample" blocks
+  * When Ghostwriter detects an entire line or multiple lines of text are formatted as "Inline Code," it will format them as a code block in the report template
+  * This change allows for additional formatting options, like highlighting or bolding text within the code block
+  * The "Code Sample" button is still present in the WYSIWYG editor if you prefer to use that for code blocks
+
+### Fixed
+
+* Fixed an error with template linting when the template did not have a `CodeInline` or `CodeBlock` style (Fixes #486)
+
+## [4.2.3] - 24 July 2024
+
+### Added
+
+* Added support for internal hyperlinks in the WYSIWYG editor (Closes #465; thanks to @domwhewell-sage)
+  * You can now create internal links to headings when you insert a hyperlink, enter `#` to start your hyperlink URL, and select a heading
+  * Internal links will be converted to cross-references in the report template
+
+### Changed
+
+* Applied `ListParagraph` to the lists in Word reports to ensure proper paragraph styling (PR #482; thanks to @smcgu)
+* The autocomplete list for keywords in reports now includes entries for `{{.ref <Evidence File Name>}}` for evidence references alongside the evidence file (e.g., `{{.<Evidence File name>}}`) (Closes #479)
+* Custom fields for observations and findings now support autocomplete and have the "Upload Evidence" button (Closes #485)
+
+### Fixed
+
+* Fixed an issue that could prevent reports from being generated if a related cloud server was missing a hostname (PR #481)
+
+## [v4.2.2] - 3 July 2024
+
+### Added
+
+* Added a check to the template linter to ensure the `CodeInline` and `CodeBlock` styles have the correct style type (PR #474)
+
+### Changed
+
+* Gave every optional field in the database a default value (a blank string) to help prevent errors when creating new entries via the GraphQL API (PR #469)
+
+### Fixed
+
+* Fixed extra fields on findings not being processed for report generation (PR #467)
+* Fixed project fields being processed twice when generating a report (PR #468)
+* Fixed syntax errors that weren't being caught properly and returning generic failure messages (PR #470)
+* Fixed observation tags missing from the linting data (PR #471)
+* Fixed uploading evidence and autocomplete on observations (PR #472)
+* Fixed a server error that could occur when using the `checkoutServer` and `checkoutDomain` mutations in the GraphQL API and providing a null value for the `note` field (PR #475)
+* Fixed the "My Active Projects" sidebar dropdown not showing the correct message if all projects are marked as complete (PR #475)
+
+## [v4.2.1] - 18 June 2024
+
+### Changed
+
+* Increased the filename character limit to 255 characters for evidence filenames
+  * This aligns with the maximum filename length for most filesystems
+  * Filenames displayed in the interface are now truncated if they are longer than 50 characters
+  * The full filenames can be viewed by hovering over the filename when viewing the evidence file's details
+* Changed report export errors to help further narrow down the cause of Jinja2 syntax errors
+* Activity log imports now make naive timestamps timezone-aware (Closes #433 & #434)
+  * If the import does not specify a timezone (e.g., _+00:00_ for UTC), the server's timezone will be used
+* When coming from an activity log to import entries, the log you came from will now be selected by default
+* A domain's current availability status is no longer only visible under the _Health_ tab
+
+### Fixed
+
+* Fixed whitespace before hyperlinks being removed in generated Word documents (Closes #461)
+* Fixed an issue with how evidence displayed inside XLSX reports (Closes #462)
+* Fixed extra fields on projects not being processed for project document generation
+
+## [v4.2.0] - 10 June 2024
+
+### Added
+
+* Added a third template document type, Project DOCX, for project document templates
+  * These templates are separate from other DOCX templates because they will have access to different context data
+  * Project templates will have access to project data
+  * Report templates will have access to project and report data
+* Added the ability to generate project documents to the project dashboard
+  * This new feature uses the new project docx templates and existing pptx templates
+* Added support for templating document properties with Jinja2 in the report templates
+  * You can now use Jinja2 expressions to template document properties like the title, author, and company name
+  * Edit these properties inside the Word application under _File_ » _Properties_, save the document, and re-upload your template
+  * Thank you, @domwhewell, for the original submission (Closes #397)
+* Added template linting checks for the Heading 1-7 styles
+  * These styles should always be present in a Word document but may be unidentifiable if _styles.xml_ is corrupted
+* Added support for using Jinja2 in the report filename template configured under the _Global Report Configuration_ inside the admin panel
+  * You can now use Jinja2 expressions to template the report filename (e.g., `{{client.name}}` or `{{now|format_datetime("Y-m-d")}}`)
+  * The filename template is used when downloading a generated report
+* Added options for importing and exporting observations
+* Added support for Jinja2-style loops inside the WYSIWYG editor
+  * You can now use Jinja2 loops to create lists, table rows, and new paragraphs
+  * Use `li`, `tr`, and `p` tags with the loops–e.g., `{%li for item in items %}...{%li endfor %}`
+* Added Jinja2 validation checks to the WYSIWYG editor to check if user-submitted content is valid Jinja2 code
+* Added filename overrides for report templates
+  * You can now set a custom filename for a report template that will override the global default filename
+  * The filename supports Jinja2 templating, like the global report filename
+* Added support for referencing custom fields inside other custom fields in the WYSIWYG editor
+  * e.g., You can now reference another custom field or a pre-formated value like `finding.severity_rt` inside a custom field
+* Added `croniter` to the Docker builds to support scheduling background tasks with Cron syntax
+
+
+### Changed
+
+* The _Reports_ tab on the project dashboard has been renamed to _Reporting_ to better reflect the new project document templates
+* Exports now include an `extra_fields` column for any user-defined extra fields associated with the exported data
+* Slack messages for cloud assets now include the asset's current state (e.g., Running, Stopped, etc.) (Closes #417)
+* The activity log filter now searches all log entries for the log, not just the entries on the current page
+  * Log entries will continue to update in real time as new entries are added
+  * Only the entries that match the filter will appear until the filter is changed or cleared
+* Set a default value of `{}` for extra fields to avoid errors when creating new entries via the GraphQL API with empty extra fields
+* Modified error handling for report generation to provide more detailed error messages when a report fails to generate (e.g., which finding or field caused the error)
+* Changed nullable database fields to no longer be nullable to prevent errors when creating new entries via the GraphQL API
+* Removed the spaces before and after the figure and table prefixes to allow for flexibility (Closes #446)
+  * If spaces before or after the prefix are desired, they can be added when setting the value in the report configuration
+  * Current values should be updated to add spaces (if desired) – e.g., change "–" to " – "
+  * Thanks to [@smcgu](https://github.com/smcgu) for the original pull request!
+
+### Fixed
+
+* Fixed an error that could occur when editing a finding with no editor assigned
+* Fixed blank findings added to a report not having user-defined fields
+* Removed the "Upload Evidence" button from report custom fields as it was not functional
+  * It will be functional in a future release
+* Fixed an issue with generating reports when an attached finding had a null field
+* Fixed an issue with cross-references not working when special characters were present in the reference name (Fixes #444)
+* Fixed issue with report generation when adjusting font sizes in the WYSIWYG editor
+
+## [4.1] - 3 April 2024
+
+### Added
+
+* Added support for creating custom fields for findings, domains, servers, projects, clients, and activity log entries
+  * Custom field types include text, integer, float, boolean, and formatted text
+  * Custom fields can be added, edited, and deleted via the admin panel
+  * Formatted text fields use the WYSIWYG editor for formatting
+  * Formatting carries over to report templates like formatted text in findings
+  * Custom fields are available in the report template context
+  * Learn more: [https://ghostwriter.wiki/](https://ghostwriter.wiki/)
+* Added support for using Jinja2 and report context data inside formatted text fields
+  * You can reference `{{ client.name }}` to insert the client's name into a formatted text field
+  * You can also use Jinja2 filters and functions to manipulate the data (e.g., `{{ client.name|upper }}` to make the client's name uppercase)
+* Added the ability to preview formatted text fields in the interface
+  * Formatted text fields can be previewed with the new "Preview" button that appears next to them in the interface
+  * Any evidence referenced in the formatted text field will also be displayed in the preview (rather than just the reference text)
+  * Jinja2 statements and expressions will appear as text in the preview as these must be evaluated in the report template
+* Added support for tables in the WYSIWYG editor (Closes #355)
+  * Tables use the _Table Grid_ style in the Microsoft Word templates
+  * Thank you for the contribution, [@domwhewell](https://github.com/domwhewell)!
+* Added support for inserting page breaks in the WYSIWYG editor
+  * Page breaks carry over to the Microsoft Word templates
+* Added an option to "sanitize" activity logs as an alternative to deleting them to remove sensitive information
+  * Sanitizing an activity log will remove selected data from all log entries in the log
+* Added a new library for "observations"
+  * These observations are similar to findings but much simpler
+  * The base model includes a title, description, and tags and can be used to track positive observations for a project
+  * The model is also highly customizable with support for custom fields (see the first item)
+* Added user permissions to control who can create, edit, and delete observations in the library
+* Added support for footer information (e.g., date, footer text, and slide numbers) in the PowerPoint report templates
+  * The footer information is set in your slide deck templates
+* Added a configuration option for the target report delivery date
+  * The target date is configured as a number of business days from the project's end date
+* Added a report configuration option to enforce title case for captions
+  * If enabled, this option will enforce title case for all evidence captions in a report
+  * An accompanying exclusion list allows you to specify words (e.g., articles) that should not be title cased
+* Added a `getExtraFieldSpec` query to the GraphQL API that returns the extra field specification for a model
+  * This query is useful for extensions that need to know the extra fields available for a model
+* Added a note to the WYSIWYG editor to call-out it is possible to access a browser's context menu by using CTRL+right-click
+* Added a new `hostname` configuration option to the General Settings in the admin panel
+  * This option allows you to set the hostname for the Ghostwriter server
+  * The hostname is used to generate links in Slack notifications and other places where a link to the server is needed
+
+### Changed
+
+* The WYSIWYG editor's toolbar and context menu have been updated to support the new table and page break features and make it easier to apply styles
+* Project and report dashboards were redesigned to improve the layout and support the new custom fields
+* Report dashboards now display the global report configuration for easier reference
+* Added tags to the lists of findings, domains, and servers
+* Uploaded evidence files can now be linked to a report rather than a finding
+  * This change allows evidence files to be used in multiple findings, and the new custom formatted text fields
+* When viewing an evidence file, the file contents are now displayed in the interface as they will appear in the report
+  * This change allows you to preview the evidence file's contents with your border and caption before adding it to a report
+  * Border width + color and figure label come from the global report configuration in the admin panel
+* PowerPoint slide decks now include "Assessment Timeline" and "Observations" slides
+  * The "Assessment Timeline" slide includes a table pre-populated with the project's start date, end date, and target report delivery date
+  * The "Observations" slide(s) are similar to the findings slides but for the new observations
+* Reworked the reporting engine to reduce complexity and pave the way for future enhancements
+  * This is mentioned here primarily for developers and integrators who may be working with the reporting engine
+* Clicking the toast notification after adding a finding to a report will now take you to the report's findings tab
+* Default values for extra fields are now set when creating a new entry with empty extra fields
+  * Default values now appear in the edit forms for the entries
+  * The default value must be set before creating the entry for it to appear in the form or be set as the default value
+* Updated the pre-built Ghostwriter CLI binaries to v0.2.19
+
+### Deprecated
+
+* The old "dot" variables used in findings (e.g., `{{.project_start}}` or `{{.client}}`) are no longer necessary and will be removed in a future release
+  * The "dot" variables inserted some data previously unavailable while writing a finding inside Ghostwriter
+  * The new support for Jinja2 composition inside the WYSIWYG editor makes these old "dot" variables redundant
+  * The "dot" variables will still work in this release but are no longer referenced in the documentation
+  * This deprecation does not include `{{.ref }}` or `{{.caption }}` which will continue to be used for captioning and creating cross-references references
+
+## [4.0.8] - 13 February 2024
+
+### Added
+
+* Added GraphQL events to update `deadline` and `markedComplete` fields for project objectives and tasks when these objects are updated via the GraphQL API
+* Added a `filter_tags` filter to the reporting engine to allow for filtering findings and other models by their tags
+
+### Fixed
+
+* Fixed an issue with the template linter that could cause an error when retrieving undeclared variables under certain conditions
+
+### Changed
+
+* Changed the `user` relationship for `objective` to `assignedTo` in the GraphQL schema to better reflect the relationship between objectives and users
+
+## [4.0.7] - 31 January 2024
+
+### Fixed
+
+* Fixed an issue with usernames with periods causing an error after login (Fixes #385)
+* Fixed error that prevented using the "Clear" checkbox for the user avatar field in the admin panel (Fixes #385)
+
+## [4.0.6] - 25 January 2024
+
+### Fixed
+
+* Fixed an issue with timestamps in the activity log that could cause an error when importing a csv file
+
+### Changed
+
+* Activity log imports and exports now include the `entry_identifier` field
+* Activity log imports now check for duplicate entries based on the `entry_identifier` field and update the existing entry instead of creating a new entry
+
+### Security
+
+* Removed the /media location from the Nginx configuration to remove the potential for unauthorized access to uploaded files
+  * Please see security advisory for details: [https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-p796-9863-mwx8](https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-p796-9863-mwx8)
+* Updated Jinja2 to v3.1.3 to address CVE-2024-22195 (Reference [CVE-2024-22195](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-22195))
+
+## [4.0.5] - 12 January 2024
+
+### Added
+
+* Added project contacts to the GraphQL schema
+* Added user accounts to the GraphQL schema to allow more automation options for project management
+  * Authenticated accounts can query name, username, email, phone number, and timezone
+* Added timezone validation into PostgreSQL to prevent invalid timezones from being saved via the GraphQL API
+* Added a new `generateCodename` mutation to the GraphQL API that generates a unique codename for new projects (or whatever else you want to use it for)
+
+### Fixed
+
+* Fixed client contacts not loading properly in the drop-down on the project dashboard
+
+### Changed
+
+* The `contacts` table is now `clientContact` in the GraphQL API schema for better consistency with other table names
+* Updated the GraphQL schema data in _DOCS_ to reflect the latest changes
+* Updated the pre-built Ghostwriter CLI binaries to v0.2.18
+
+## [4.0.4] - 8 January 2024
+
+### Added
+
+* Added a new `regex_search` filter for report templates that allows you to search for a regular expression in a string
+
+### Fixed
+
+* Fixed an edge case where a manually edited domain could remain marked as expired on the back end and prevent checkout
+
+### Security
+
+* Resolved a potential XSS vulnerability with autocomplete for finding titles (Closes #374)
+
+## [4.0.3] - 15 December 2023
+
+### Added
+
+* Added tracking for which VirusTotal scanners have flagged a domain as malicious to the health check task
+* Added a new `entry_identifier` field to activity log entries to make it easier to identify entries when using the GraphQL API
+  * The field is an open-ended text field that you can use to track a job ID, UUID, or other identifier for the entry
+  * The field has no unique constraints at this time, so you can use it to track multiple entries with the same identifier
+  * Logging extensions like the `cobalt_sync` project use this field to avoid duplicate entries when re-syncing
+  * The field is hidden by default in the Ghostwriter web UI when viewing log entries
+
+### Fixed
+
+* Fixed client contacts missing from the dropdown menu after assigning a contact (Fixes #175)
+
+### Changed
+
+* Adjusted the wording of the reminder message sent for upcoming domain releases in Slack to make it clear the domain would remain checked out until the end of the project
+* Improved the Slack message sent when domain names go from "healthy" to "burned"
+* Expanded PowerPoint report generation to include new content with information about team members and objectives
+* Removed character limits on log entry fields to allow for longer entries
+  * This change is most useful for fields that track IP addresses
+  * This resolves an issue that could arise when using the `mythic_sync` extension to sync logs with Mythic from a server host with multiple NICs and IPv6 addresses
+* Updated the pre-built Ghostwriter CLI binaries to v0.2.17
+
+## [4.0.2] - 14 November 2023
+
+### Fixed
+
+* Fixed a report rendering error when a report had no findings
+* Fixed an issue with search autocomplete and finding titles with single quotes
+* Fixed links for editing scope lists and targets accessed from the project dashboard's dropdown menus
+
+### Changed
+
+* The WYSIWYG editor will now automatically expand the height of the editor to fit the content as you type (up to the height of the browser window) (Closes #344)
+
+### Security
+
+* Updated the TinyMCE WYSIWYG editor to v5.10.8 to incorporate security fixes into Ghostwriter's self-hosted files
+
+## [4.0.1] - 27 September 2023
+
+### Added
+
+* Added `short_name` and `address` fields to the company information for use in report templates (Closes #339)
+
+### Fixed
+
+* Fixed the activity log export returning incorrect csv files (Fixes #341)
+
+### Changed
+
+* Removed the restriction on backup commands that prevented them from being run on if `postgres` was set as the username (Closes #340)
+
+## [4.0.0] - 20 September 2023
+
+### Added
+
+* Added a "People" tab to the project dashboard that shows the project's assignments and client contacts
+* Added configuration options for managing browser sessions
+  * `SESSION_COOKIE_AGE` sets the number of seconds a session cookie will last before expiring
+  * `SESSION_EXPIRE_AT_BROWSER_CLOSE` sets whether the session cookie will expire when the browser is closed
+  * `SESSION_SAVE_EVERY_REQUEST` sets whether the session cookie will be saved on every request
+* Added support for two-factor authentication using TOTP
+* Added support for adding contacts to projects
+  * Supports creating project-specific contacts and adding contacts from the client
+  * Project contacts appear under the new `contacts` key in the report data
+  * A project contact can be flagged as the primary contact and mark the contact as the report recipient
+  * The primary contact appears under the new `recipient` key in the report data
+* Added autocomplete options to filter forms for the finding, domain, and server libraries
+* Added an option to copy an activity log entry to your clipboard as JSON for easier sharing
+* Added an option to the `review_cloud_infrastructure()` task to only report Digital Ocean droplets that are currently running
+
+### Changed
+
+* Separated the project form into two forms: one for the project details and assignments and one for project components (e.g., white cards, objectives)
+  * This allows accounts with the `user` role to edit project components without permission to edit the project or its assignments
+* Moved project assignments to the new "People" tab on the project dashboard
+* Hid menus and buttons for features that are not available to the current user
+* Access to the admin console is now routed through the main login form to require 2FA (if enabled for the user)
+* The CVSS Vector and "added as blank" fields on report findings are now optional as they were meant to be
+
+### Removed
+
+* Removed the legacy REST API deprecated in Ghostwriter v3
+* Removed the unused `restricted` account role
+  * This is a clean-up for the release candidate; the `restricted` role was experimental and never implemented in the access controls
+* Removed the `user` role's privileges to create, edit, and delete project assignments and client contacts to better adhere to the role's intended permissions
+* Removed permissions for updating report templates via the GraphQL API
+  * This option will return in a future release when it is possible to upload a template file via the API
+
+## [3.2.12] - 18 September 2023
+
+### Added
+
+* Added the option to configure a default paragraph style for when you do not want to use the built-in default `Normal` style (PR #307)
+  * Thanks to @federicodotta  for the submission!
+
+### Changed
+
+* The `restore` command will now revoke open database connections to prevent errors when restoring a database backup (PR #335)
+  * Thanks to @marcioalm for the submission!
+
+## [3.2.11] - 5 September 2023
+
+### Added
+
+* Added CVSS and tags to the finding rows in the Excel workbook report (xlsx)
+
+### Fixed
+
+* Fixed the `project_type` keyword not working in report generation
+
+## [3.2.10] - 13 July 2023
+
+### Fixed
+
+* Adjusted logic for marking a domain as expired when syncing with Namecheap
+  * A domain marked as auto-renewable can expire, so Ghostwriter will now also mark a domain as expired and disable auto-renew if the API response has `AutoRenew` and `IsExpired` both set to `true`
+
+## [3.2.9] - 13 June 2023
+
+### Added
+
+* Added CVSS and tags to the finding rows in the Excel workbook report (xlsx)
+
+### Changed
+
+* Added a linter error message to offer suggestions for the often confusing `expected token 'end of print statement', got 'such'` Jinja2 syntax error
+
+### Fixed
+
+* The linter will now recognize the `id` value on findings as valid
+
+### Security
+
+* Added checks to escape potential formulas in Excel workbooks
+  * Please see security advisory for details: [https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-6367-mm8f-96gr](https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-6367-mm8f-96gr)
+
+## [3.2.8] - 24 May 2023
+
+### Added
+
+* Added a popover tooltip to the dashboard calendar's events to show the full title and additional details about the event
+* Added a `get_item` filter for use in report templates that allows you to retrieve a single item from a list of items
+* Added the Sugar parser to the JavaScript to improve international date parsing
+
+### Changed
+
+* Assignments displayed in the calendar and on the dashboard now show the project role for the assignment (Closes #311)
+* The server will now allow domains with expiration dates in the past to be checked out if auto-renew is enabled
+* Updated the pre-built Ghostwriter CLI binaries to v0.2.13
+
+### Fixed
+
+* Fixed an issue with the domain expiration dates sorting as integers
+* Fixed an issue that could prevent releasing a domain if the domain's registrar was empty
+
+## [v3.2.7] - 1 May 2023
+
+### Added
+
+* Added support for exporting and importing tags for the current import/export models (log entries, domains, servers, and findings)
+
+### Changed
+
+* The legacy REST API key notification for new activity logs now displays the log's ID to be used with the API and extensions like `mythic_sync` and `cobalt_sync`
+* When creating a new activity log from the project dashboard, that project will now be automatically selected for the new log
+
+### Fixed
+
+* Fixed sidebar search boxes not working as intended following changes in v3.2.3 (Closes #294)
+
+## [v3.2.6] - 10 April 2023
+
+### Changed
+
+* Changed the project assignments list on the home dashboard to show the assignment's start and end dates instead of the project's start and end dates (Closes #302)
+
+### Fixed
+
+* Fixed an issue that would cause a server error when uploading or editing an evidence file to a blank finding (Fixes #303)
+
+## [v3.2.5] - 31 March 2023
+
+### Added
+
+* A report's title can now be added to the report download filename template as a new `title` variable
+
+### Changed
+
+* The global report configuration can now be reviewed on the management page (_/home/management/_)
+
+### Fixed
+
+* Fixed an issue that prevented saving an edited activity log entry when editing a timestamps seconds value
+
+## [v3.2.4] - 28 March 2023
+
+## Changed
+
+* Updated the pre-built Ghostwriter CLI binaries to v0.2.11
+
+### Fixed
+
+* Fixed an issue that could result in an activity log's "latest activity" timestamp to be incorrect
+* Fixed a bug that toggled a reported finding's editing status from "Ready" to "Needs Editing" after saving that finding
+
+## [v3.2.3] - 22 March 2023
+
+### Added
+
+* Added the option to filter the project list by the assessment type
+* Added `NO_PROXY` environment variables to production containers to prevent a proxy from being used for internal container connections
+* Added a `tools` key to the report template context data that contains a list of unique tools that appeared in activity log entries
+
+### Changed
+
+* The server will now update references to an evidence file inside the associated finding when you change that file's name
+* Changed the server search form under the project dashboard's Infrastructure tab to work like the adjacent domain search form
+  * The form no longer requires an exact match for an IP address
+  * It is now possible to search for partial matches against one of the server's IP addresses or its hostname
+  * The form will now load a list of results for review rather than take you directly to the checkout page
+* Combined some fields for the domain and server filter forms on their respective library pages
+  * The domain filter has combined the "Name" and "Categorization" fields
+  * The server filter has combined the "Hostname" and "IP Address" fields
+* Simplified the client search to a single field that searches against the client's full name, short name, and codename (Closes #294)
+  * Short names are now listed alongside the full name and codename on the client list page
+* Filtering by client name on the project filter page also searches against the client's full name, short name, and codename
+* Copied log entries now have their start and end dates set automatically to the current timestamp
+* Updated WYSIWYG editor skin to better match the rest of the interface
+* Merged PR #274 to allow the option for authenticating with social accounts
+
+### Fixed
+
+* Fixed severity category ordering appearing reversed for new installations of v3.2.0 to v3.0.2 (Fixes #292)
+* Fixed hyperlinks not being distinguishable from the regular text in notes (Closes #295)
+
+## [v3.2.2] - 13 February 2023
+
+### Changed
+
+* Upgraded Ghostwriter CLI binaries to v0.2.9
+
+### Fixed
+
+* Fixed situations where the webpage could fail to load after submitting a client and project form with a validation error (Fixes #290)
+* Fixed tags on log entries not appearing immediately in the table after adding them
+* Fixed issue that prevented updating a domain
+
+## [v3.2.1] - 7 February 2023
+
+### Added
+
+* Added a warning to the report form about still needing to select a template if a global default is not configured
+* Added report tags to the report data as a new `tags` variable accessible in report templates
+
+### Fixed
+
+* Fixed a server error that could occur when attempting to add a domain that already existed in the library
+* Fixed the report update form still requiring a template selection after the v3.2 changes
+* Fixed the report template linter not recognizing `tags` as a valid key for objects with tags
+
+## [v3.2.0] - 2 February 2023
+
+### Added
+
+* Added support for applying tags to clients, projects, reports, findings, domains, servers, logs, and log entries
+* Added whitecards and deconflictions nodes to the GraphQL schema for projects
+* Added a notification to finding forms that warns you if another user has submitted changes to the same finding
+* Added a button to project scope forms to automatically split comma-delimited scope lists into separate lines
+
+### Fixed
+
+* Fixed the wrong avatar appearing in the corner when viewing another user's profile
+* Fixed unnecessary scrolling animation that could occur when clicking a tab in certain browsers
+
+### Changed
+
+* All new log view page with improved editing functionality
+  * Selections for showing/hiding a column are now persistent between page visits and refreshes
+  * Editing table rows now use a modal and allows all fields to be edited and saved at once
+* The web UI now supports customizing the severity category titles
+* Changed project assignments to allow the same person to be assigned more than once as long as the date ranges do not overlap
+* You can clear the docx or pptx template selected for a report
+  * If you clear the template, the default template will be used instead
+  * If you do not have a default template configured, the report will not be able to be generated
+* A domain's "reset DNS" flag will now default to true when creating a new domain
+* Moved all CSS and JavaScript files to local hosting for instances where Ghostwriter is running on a system without any internet access
+* The IP address field for project targets now accepts individual IP addresses and CIDR ranges (Closes [#211](https://github.com/GhostManager/Ghostwriter/issues/211))
+* Report templates can now be flagged as landscape for tracking (Reference [#281](https://github.com/GhostManager/Ghostwriter/issues/281))
+* Various web UI and scripting improvements for better performance, usability, and accessibility
+
+### Security
+
+* Proactively upgraded core dependencies and base OS images to their latest stable versions
+* Applied additional sanitization to user-editable strings that may appear in HTML to address potential XSS vulnerabilities
+* Updated TinyMCE to the latest v5 to address CVE-2022-23494 (Reference [CVE-2022-23494](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2022-23494))
+
+## [3.1.4] - 11 November 2022
+
+### Fixed
+
+* Fixed an issue with lists that caused list items to be indented incorrectly in Word documents (Fixes [#264](https://github.com/GhostManager/Ghostwriter/issues/264))
+
+### Security
+
+* Switched to a sandbox environment for Jinja2 to restrict access to private object attributes inside report templates (Fixes [#266](https://github.com/GhostManager/Ghostwriter/issues/266))
+  * Sandbox security will be monitored and improved upon, as needed, in future releases
+  * Please see security advisory for details: [https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-rpqr-g6cp-f3h2](https://github.com/GhostManager/Ghostwriter/security/advisories/GHSA-rpqr-g6cp-f3h2)
+
+## [3.1.3] - 3 November 2022
+
+### Added
+
+* Added a new configuration section with the ability to set a default timezone used for forms
+* Added a new option to Global Report Configuration to enable configuring default download filenames for report files
+
+## [3.1.2] - 31 October 2022
+
+### Fixed
+
+* Fixed error that could cause project updates to fail when no Slack channel is set (Fixes [#261](https://github.com/GhostManager/Ghostwriter/issues/261))
+
+### Changed
+
+* Extended list of bad categories for domain health checks (Related to [#236](https://github.com/GhostManager/Ghostwriter/issues/236))
+
+## [3.1.1] - 18 October 2022
+
+### Fixed
+
+* Fixed "added as blank" flag being cleared from a finding following an update
+* Fixed initial data for `DeconflictionStatus` model missing a status option
+
+### Changed
+
+* Increased size of the modal for previewing log entries related to deconfliction events
+* Adjusted the design of the domain and server dashboards to match the new design of the client and project dashboards
+
+## [3.1.0] - 14 October 2022
+
+### Fixed
+
+* Fixed a bug that could cause content or styling to be lost inside nested text formatting
+
+### Added
+
+* New deconfliction event tracking feature now available under the "Deconflictions" tab on project dashboards
+* New whitecard tracking feature now available under the "White Cards" tab on project dashboards
+
+### Changed
+
+* Findings added to a report via a blank template (i.e., not added from the library) will now appear with a flag  icon for easy identification
+* All fields that use the WYSIWYG editor now have a `RichText` counterpart available in report templates (Closes [#241](https://github.com/GhostManager/Ghostwriter/issues/241))
+* Improved sample "tutorial" template to cover more advanced usage of filters, variables, and more
+
+## [3.0.7] - 10 October 2022
+
+### Fixed
+
+* Fixed evidence files with uppercase extensions not being included in rendered reports (Closes #74)
+
+### Added
+
+* Logs now have an option to mute notifications (available to users with the `admin` and `manager` roles)
+
+### Changed
+
+* Log activity monitor will now only check logs for projects inside the execution window
+* Tweaked report template permissions to allow users with the `admin` role that are not flagged as `staff` to edit or delete protected templates
+
+## [v3.0.6] - 3 October 2022
+
+### Added
+
+* Added system health API endpoints and Docker health check commands (see wiki for details)
+* Added `curl` to container images to aid in troubleshooting and enable health checks
+
+### Changed
+
+* Calendar view selection will now persist across sessions and page refreshes
+* Upgraded Ghostwriter CLI binaries to v0.2.5
+* Cloning a report will now clone any evidence files associated with the findings (Thanks to @ly4k! Closes PR #234)
+
+## [v3.0.5] - 23 September 2022
+
+### Fixed
+
+* Fixed finding guidance display when viewing a finding attached to a report
+* Fixed connection errors with an AWS region causing remaining regions to be skipped in the cloud monitoring task
+
+### Added
+
+* Added an `attachFinding` mutation to the GraphQL API for easily attaching a copy of a finding from the library to a report
+* Added ability to copy/paste evidence into the upload form and view a preview (Thanks to @brandonscholet! Closes PR #228)
+
+## [3.0.4] - 12 September 2022
+
+### Fixed
+
+* Fixed "No entries to display" reappearing during log syncs under some circumstances
+
+### Added
+
+* Added Slack notification to confirm Slack configuration for a new project
+* Added Slack notification for project date changes and checkout adjustments
+* Added new scheduled task that checks for activity logs for active projects that have not been synced in the last 24 hours and sends a Slack notification to the project channel
+* Added a _.dockeringore_ file to reduce size and build time of Docker images
+* Upgraded Ghostwriter CLI binaries to v0.2.4
+
+### Changed
+
+* Slack alert target can now be left blank if you do not want to target a person or channel
+* Completed projects will no longer appear in the list of projects for a domain checkout
+* Domain health checks will now flag a domain if VirusTotal has applied the `dga` tag to it
+* Slack message formatting has been improved and will no longer include very large task outputs
+* Updated Nginx image to 1.23.1 to enable building it on M1 macOS machines
+
+## [3.0.3] - 5 August 2022
+
+### Fixed
+
+* Removed duplicate toast message displayed after the successful creation of a new oplog
+* Fixed GraphQL configuration that could cause webhook authentication to fail
+* Fixed server error when trying to view entries for an oplog that does not exist
+
+### Changed
+
+* Groups are now hidden on the user profile unless a user is part of a group
+* Adjusted client and project dashboards for better display of information and controls
+* Display of client's timezone has been changed to display the client's current date and time with the abbreviated timezone name
+* API keys now start with an initial expiry date that is +1 days from the current date
+* Project descriptions are now truncated after 35 words to make lengthy descriptions more readable in some sections of the UI
+* Infrastructure notes under the project dashboard are now inside collapsible sections for easier reading
+* Upgraded Ghostwriter CLI binaries to v0.2.3
+
+## [3.0.2] - 2 August 2022
+
+### Fixed
+
+* Upgraded `Pillow` dependency to avoid issue between `Pillow` and `setuptools` v63.3.0
+
+## [3.0.1] - 1 August 2022
+
+### Added
+
+* Added the `CSRF_TRUSTED_ORIGINS` to the base configuration to make it easier to add trusted origins for accessing Ghostwriter via a web proxy
+* Oplog ID now appears at the top of the log entries view for easier identification
+* Committed Ghostwriter CLI binaries (v0.2.2) for Windows, macOS, and Linux
+* Added project notes to the serialized report data as a list under `project.notes` (Closes #210)
+
+### Changed
+
+* Set defaults on some fields to make it easier to insert new domains, objectives, and findings via GraphQL
+  * New domains will now default to WHOIS enabled, healthy, and available
+  * Objectives will now default to primary priority and position one (top of the list)
+  * Reported findings will now insert into position one (top of the list for its severity category)
+* Log entry fields can now be null to make it easier to insert new entries via GraphQL
+* Improved log entry view to make it easier to view logs
+* Users with the `manager` role can now update and delete protected report templates
+* User accounts can now be filtered by role in the admin panel
+* Removed GraphQL `operatorName` field preset to allow this value to be set by the user
+
+### Fixed
+
+* Fixed "Stand by" message appearing for all users viewing a report when one user generates a report
+* Fixed domain expiration dates not sorting properly in the domain table when date format is changed
+* Fixed operation log entries not loading if null values were present from GraphQL submissions
+* Fixed `complete` field being required for reported findings but unavailable in the GraphQL schema (Fixes #226)
+* Fixed oplog entries not being displayed if they contained null values from GraphQL submissions
+* Fixed log entry tables not showing "No entries to display" row when no entries are available
+* Fixed an issue that could cause an error when making a new activity log with a name longer than 50 characters
+* Fixed minor issue that could prevent PowerPoint generation if multiple evidence images were stacked on top of each other inside a list
+
+## [3.0.0] - 22 June 2022
+
+### Changed
+
+* Committed Ghostwriter CLI binaries (v0.2.1) for Windows, macOS, and Linux
+
+## [3.0.0-rc1] - 8 June 2022
+
+### Added
+
+* Committed Ghostwriter CLI binaries (v0.1.1) for Windows, macOS, and Linux
+* Added support for CVSS scoring with a calculator for findings (big thanks to @therealtoastycat and PR #189)
+
+### Changed
+
+* Docker will now use one _.env_ file with values for all environments
+  * The file is generated by Ghostwriter CLI
+* Ghostwriter CLI will now be used for installation, configuration, and management of the Ghostwriter server
+
+### Deprecated
+
+* The individual _.env_ files stored in `.envs/` are no longer used and will be ignored by v3.x.x and later
+
+### Removed
+
+* Removed old environment variable templates from the project because they are no longer used for setup or management
+
+## [2.3.0-rc2] - 3 June 2022
+
+### Added
+
+* New options to generate and revoke API tokens with a set expiry date
+* Added Hasura GraphQL engine to production environments
+* Usernames are now clickable and open the user's profile page for viewing
+* Added a `generateReport` mutation to the GraphQL API capable of returning the JSON report data as a base64 string
+* Added user controls for generating and revoking API tokens from the user profile page
+* Added `checkoutDomain` and `checkoutServer` actions to the GraphQL API that validate checkouts
+* Added `deleteDomainCheckout`, `deleteServerCheckout`, `deleteTemplate`, and `deleteEvidence` actions to the GraphQL schema that clean-up the filesystem and database after deletions
+
+### Changed
+
+* Updated the Nginx configuration to incorporate the Hasura container
+* Updated style of the finding preview pages for the finding library
+* Updated style of notes to make them cleaner and easier to manage
+* Project dashboard's "Objectives" tab will now show the current number of incomplete objectives and update when toggling objectives
+* Updated keyword reference panel displayed when editing findings
+* Subtask forms for objectives will now default to the objective's deadline date instead of "today"
+* Objective deadlines will now be automatically adjusted when the parent objective's deadline changes
+* Database migrations now set default values for timestamps (current time), timezones ("America/Los_Angeles"), and boolean values (False)
+  * Enables easier creation of new entries via the GraphQL API
+
+### Deprecated
+
+* None
+
+### Removed
+
+* Removed unnecessary status badges on tabs in the project dashboard that were confusing and not very helpful
+* Revoked direct insert permissions for `History` and `ServerHistory` tables used for tracking domain and server checkouts
+
+### Fixed
+
+* Upgraded `django-bleach` dependency to fix error with latest `python-bleach` (Fixes #208)
+* Fixed error that blocked creation of default `BlockQuote` style in the report template
+* Fixed domain age column not sorting correctly in domain library table
+* Checkbox in server form will no longer appear way bigger than intended
+* Fixed issue where `<em>` tags could cause report generation to fail
+
+### Security
+
+* Upgraded `pyjwt` to v2.4.0 to address CVE-2022-29217
 
 ## [2.3.0-rc1] - 2022-04-01
 
@@ -27,11 +2252,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * User profiles now only show the user's role, groups, and Ghostwriter user status to the profile owner
 * Updated nginx.conf to align it with Mozilla's recommendations for nginx v1.21.1 and OpenSSL 1.1.1l
   * See config: [https://ssl-config.mozilla.org/#server=nginx&version=1.21.1&config=intermediate&openssl=1.1.1l&ocsp=false&guideline=5.6](https://ssl-config.mozilla.org/#server=nginx&version=1.21.1&config=intermediate&openssl=1.1.1l&ocsp=false&guideline=5.6)
-* Toast messages for errors are no longer sticky so they do not have to be manually dismissed when covering UI elements
+* Toast messages for errors are no longer sticky, so they do not have to be manually dismissed when covering UI elements
 * Domain list table now shows an "Expiry" column and "Categories" column now parses the new ``categorization`` JSON field data
 * Domain list filtering now includes a "Filter Expired" toggle that on by default
   * Filters out domains with expiration dates in the past and `auto_renew` set to `False` even if status is set to "Available"
-* The table on the domain list page and the menu on the domain details page will no longer disable the check out option if a domain's status is set to "Burned"
+* The table on the domain list page and the menu on the domain details page will no longer disable the check-out option if a domain's status is set to "Burned"
 * Simplified usage of the `format_datetime` filter
   * Filter now accepts only two arguments: the date and the new format string
   * Format string should use Django values (e.g., `M d, Y`) instead of values translated to Python's standard (e.g., `%b %d, %Y`)
@@ -77,7 +2302,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Fixed sidebar tab appearing below delete confirmations
 * Fixed cloud server forms requiring users to fill in all auxiliary IP addresses
 * Fixed project serialization issue that prevented project data from loading automatically for domain and server checkout forms
-* Fixed active project filtering for the list in the sidebar so it will no longer contain some projects marked as completed
+* Fixed active project filtering for the list in the sidebar, so it will no longer contain some projects marked as completed
 * Fixed a rare reporting error that could occur if the WYSIWYG editor created a block of nested HTML tags with no content
 * Fixed ignore tags not working for Digital Ocean assets
 * Fixed an error caused by cascading deletes when deleting a report under some circumstances
@@ -91,7 +2316,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * Changed default display filter to only show active projects
   * Adjusted project status filter to have three options: all projects, active projects, and completed projects
 * Updated dashboard and calendar to show past and current events for browsing history within the calendar
-  * Past events marked as completed will appear dimed with a strikethrough and `: Complete` added to the end
+  * Past events marked as completed will appear dimmed with a strike-through and `: Complete` added to the end
 * Upgraded dependencies to their latest versions (where possible)
   * Django v3.1.13 -> v3.2.11
   * Did not upgrade `docxtpl`
@@ -193,7 +2418,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * Fixed cloud server forms requiring users to fill in all auxiliary IP addresses
 * Fixed project serialization issue that prevented project data from loading automatically for domain and server checkout forms
-* Fixed active project filtering for the list in the sidebar so it will no longer contain some projects marked as completed
+* Fixed active project filtering for the list in the sidebar, so it will no longer contain some projects marked as completed
 * Fixed a rare reporting error that could occur if the WYSIWYG editor created a block of nested HTML tags with no content
 * Fixed ignore tags not working for Digital Ocean assets
 * Fixed an error caused by cascading deletes when deleting a report under some circumstances
@@ -246,7 +2471,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Moved some form validation logic to Django Signals in preparation for the API
 * Added a custom "division by zero" error message for times when a Jinja2 template attempts to divide a value (e.g., total num of completed objectives) that is zero without first checking the value
 * Bumped Toastr message opacity to `.9` (up from `.8`) to improve readability
-* Bumped 50 character limit on certain `OplogEntry` values to 255 (the standard for other models)
+* Bumped 50-character limit on certain `OplogEntry` values to 255 (the standard for other models)
 * Condensed Docker image layers and disabled caching for `pip` and `apk` to reduce image sizes by about 0.2 to 0.3GB
 * Optimized and improved code quality throughout the project based on recommendations from Code Factor ([https://www.codefactor.io/repository/github/ghostmanager/ghostwriter](https://www.codefactor.io/repository/github/ghostmanager/ghostwriter))
 * Added Signals to release a checked-out server or domain if the current checkout is deleted (so it is released immediately rather than waiting for a scheduled task to run)
@@ -300,7 +2525,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Moved some form validation logic to Django Signals in preparation for the API
 * Added a custom "division by zero" error message for times when a Jinja2 template attempts to divide a value \(e.g., total num of completed objectives\) that is zero without first checking the value
 * Bumped Toastr message opacity to `.9` \(up from `.8`\) to improve readability
-* Bumped 50 character limit on certain `OplogEntry` values to 255 \(the standard for other models\)
+* Bumped 50-character limit on certain `OplogEntry` values to 255 \(the standard for other models\)
 * Condensed Docker image layers and disabled caching for `pip` and `apk` to reduce image sizes by about 0.2 to 0.3GB
 * Optimized and improved code quality throughout the project based on recommendations from Code Factor \([https://www.codefactor.io/repository/github/ghostmanager/ghostwriter](https://www.codefactor.io/repository/github/ghostmanager/ghostwriter)\)
 
@@ -333,7 +2558,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * Added new `filter_type` filter to report templates \(submitted by @5il with PR \#152\).
 * Introduced the new `ReportData` serializer. This is nearly invisible to users but is a huge efficiency and performance upgrade for the back-end. Changes to project data models will now automatically appear in the raw JSON reports and be accessible within DOCX reports.
-* The new serializer has modified some of the Jinja2 template expressions. View a JSON report to see everything available. For example, instead of writing `{{ project_codename }}`, you will access this project value with `{{ project.codename }}`.
+* The new serializer has modified some Jinja2 template expressions. View a JSON report to see everything available. For example, instead of writing `{{ project_codename }}`, you will access this project value with `{{ project.codename }}`.
 * Ghostwriter now handles dates differently to better support all international date formats. Dates displayed in the interface and dates within reports \(e.g., `report_date`\) will match the date locale set in your server settings \(`en-us` by default\).
 
 ### Fixed
@@ -345,7 +2570,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Adjusted Dockerfile files to fix potential filesystem issues with the latest Alpine Linux image \(submitted by @studebacon with PR \#143\).
 * Added a missing field in the Report Template admin panel
 * "Add to Report" on the finding details page now works
-* Updated delete actions for operation logs to avoid anerror that could prevent the deletion of entries when deleting an entire log
+* Updated delete actions for operation logs to avoid an error that could prevent the deletion of entries when deleting an entire log
 * Domain age calculations are now accurate
 * An invalid value for domain purchase date no longer causes a server error during validation
 * Constrained `Twisted` library to v20.3.0 to fix a potential issue that could come up with Django Channels
@@ -368,7 +2593,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 * Introduced the new `ReportData` serializer. This is nearly invisible to users but is a huge efficiency and performance upgrade for the back-end. Changes to project data models will now automatically appear in the raw JSON reports and be accessible within DOCX reports.
-* The new serializer has modified some of the Jinja2 template expressions. View a JSON report to see everything available. For example, instead of writing `{{ project_codename }}`, you will access this project value with `{{ project.codename }}`.
+* The new serializer has modified some Jinja2 template expressions. View a JSON report to see everything available. For example, instead of writing `{{ project_codename }}`, you will access this project value with `{{ project.codename }}`.
 * Ghostwriter now handles dates differently to better support all international date formats. Dates displayed in the interface and dates within reports \(e.g., `report_date`\) will match the date locale set in your server settings \(`en-us` by default\).
 
 ### Fixed
@@ -420,7 +2645,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     * Notable changes and adjustments:
         * Added a project calendar to track assignments, objectives, tasks, and project dates
         * Added new objective tracker with task management, prioritization, and sorting
-* Implemented a new server search in the side bar (under _Servers_) that searches all static servers, cloud servers in projects, and alternate addresses tied to servers
+* Implemented a new server search in the sidebar (under _Servers_) that searches all static servers, cloud servers in projects, and alternate addresses tied to servers
 * Added template linting checks for additional styles that may not be present in a report (closes #139)
 * Added Clipboard.js to support better, more flexible "click to copy to clipboard" in the UI
 * Added several new Jinja2 expressions, statements, and filters for Word DOCX reports
@@ -449,7 +2674,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Fixed evidence filenames with all uppercase extensions not appearing in reports (closes #74)
 * Fixed a recursive HTML/JavaScript escape in log entries (closes #133)
 * Fixed incorrect link in the menu for a point of contact under a client (closed #141 and #141)
-* Fixed `docker-compose` errors related to latest verison of the `crytpography` library (closes #147)
+* Fixed `docker-compose` errors related to latest version of the `cryptography` library (closes #147)
 * Fixed possible issue with assigning a name to an AWS asset in the cloud monitor task
 * Closed loophole that could allow a non-unique domain name
 
@@ -483,7 +2708,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * Fixed error in cloud monitor notification messages that caused messages to contain the same external IP addresses for all VPS instances
 * Fixed bug that caused delete actions on cloud server entries to not be committed
-* Fixed `ref` tags in findings that were ingored if they followed a `ref` tag with a different target
+* Fixed `ref` tags in findings that were ignored if they followed a `ref` tag with a different target
 * Fixed PowerPoint "Conclusion" slide's title
 * Fixed filtering for report template selection dropdowns that caused both document types to appear in all dropdown menus
 

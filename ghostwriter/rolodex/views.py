@@ -1,58 +1,131 @@
-"""This contains all of the views used by the Rolodex application."""
+"""This contains all the views used by the Rolodex application."""
 
 # Standard Libraries
 import datetime
 import json
 import logging
+import mimetypes
+import os
+from urllib.parse import urlparse
 
 # Django Imports
 from django import forms
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.db import transaction
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from django.shortcuts import get_object_or_404, redirect, render
+from django.db import IntegrityError, transaction
+from django.db.models import Q
+from django.http import (
+    Http404,
+    HttpRequest,
+    HttpResponse,
+    HttpResponseRedirect,
+    FileResponse,
+    JsonResponse
+)
+from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
+from django.views import View
+from django.views.generic import ListView
 from django.views.generic.detail import DetailView, SingleObjectMixin
-from django.views.generic.edit import CreateView, DeleteView, UpdateView, View
+from django.views.generic.edit import CreateView, DeleteView, UpdateView
+from django.db.models import Exists, OuterRef
+
+# 3rd Party Libraries
 
 # Ghostwriter Libraries
+from ghostwriter.api.utils import (
+    ForbiddenJsonResponse,
+    RoleBasedAccessControlMixin,
+    get_client_list,
+    get_project_list,
+    verify_user_is_privileged,
+)
+from ghostwriter.commandcenter.models import BloodHoundConfiguration, ExtraFieldSpec, ReportConfiguration
+from ghostwriter.commandcenter.views import CollabModelUpdate, ExtraFieldJsonView, ExtraFieldRichTextPreviewView
+
 from ghostwriter.modules import codenames
+from ghostwriter.modules.model_utils import to_dict
+from ghostwriter.modules.reportwriter.base import ReportExportTemplateError
+from ghostwriter.modules.reportwriter.project.json import ExportProjectJson
+from ghostwriter.modules.shared import add_content_disposition_header
+from ghostwriter.modules.shared import get_tags_for_queryset
+from ghostwriter.reporting.models import ReportTemplate
 from ghostwriter.rolodex.filters import ClientFilter, ProjectFilter
 from ghostwriter.rolodex.forms_client import (
     ClientContactFormSet,
     ClientForm,
+    ClientInviteFormSet,
     ClientNoteForm,
 )
 from ghostwriter.rolodex.forms_project import (
+    DeconflictionForm,
     ProjectAssignmentFormSet,
+    ProjectComponentForm,
+    ProjectContactFormSet,
     ProjectForm,
+    ProjectInviteFormSet,
     ProjectNoteForm,
     ProjectObjectiveFormSet,
     ProjectScopeFormSet,
     ProjectTargetFormSet,
+    WhiteCardFormSet,
 )
 from ghostwriter.rolodex.models import (
     Client,
     ClientContact,
+    ClientInvite,
     ClientNote,
+    Deconfliction,
     ObjectivePriority,
     ObjectiveStatus,
     Project,
     ProjectAssignment,
+    ProjectContact,
+    ProjectInvite,
     ProjectNote,
     ProjectObjective,
     ProjectScope,
     ProjectSubTask,
     ProjectTarget,
 )
+from ghostwriter.shepherd.external.bloodhound.client import APIClient as BhAPIClient, Credentials as BhCredentials, APIException as BhAPIException
 from ghostwriter.shepherd.models import History, ServerHistory, TransientServer
 
 # Using __name__ resolves to ghostwriter.rolodex.views
 logger = logging.getLogger(__name__)
+
+
+PROJECT_STATUS_PRESENTATION = {
+    "Upcoming": {
+        "help": "The execution window has not started.",
+        "icon": "fa-calendar-alt",
+        "style": "is-upcoming",
+    },
+    "In Progress": {
+        "help": "The project is within its scheduled execution window.",
+        "icon": "fa-play-circle",
+        "style": "is-in-progress",
+    },
+    "Awaiting Completion": {
+        "help": "The execution window has ended; mark the project complete when work is closed.",
+        "icon": "fa-hourglass-end",
+        "style": "is-awaiting-completion",
+    },
+    "Complete": {
+        "help": "This project is complete. Additional reports cannot be created.",
+        "icon": "fa-check-circle",
+        "style": "is-complete",
+    },
+}
+
+
+def get_project_status_presentation(project: Project) -> dict:
+    """Return the presentational details for a project's derived lifecycle status."""
+    status = project.get_lifecycle_status()
+    return {"label": status, **PROJECT_STATUS_PRESENTATION[status]}
 
 
 ##################
@@ -71,6 +144,10 @@ def update_project_badges(request, pk):
     :template:`snippets/project_nav_tabs.html`
     """
     project_instance = get_object_or_404(Project, pk=pk)
+
+    if not project_instance.user_can_edit(request.user):
+        return ForbiddenJsonResponse()
+
     html = render_to_string(
         "snippets/project_nav_tabs.html",
         {"project": project_instance},
@@ -89,36 +166,68 @@ def update_client_badges(request, pk):
     :template:`snippets/client_nav_tabs.html`
     """
     client_instance = get_object_or_404(Client, pk=pk)
+
+    if not client_instance.user_can_edit(request.user):
+        return ForbiddenJsonResponse()
+
     html = render_to_string(
         "snippets/client_nav_tabs.html",
-        {"client": client_instance},
+        {"client": client_instance, "request": request},
+    )
+    return HttpResponse(html)
+
+
+@login_required
+def update_project_contacts(request, pk):
+    """
+    Return an updated version of the template following the addition of a new
+    :model:`rolodex.ProjectContact` entry.
+
+    **Template**
+
+    :template:`snippets/project_contacts_table.html`
+    """
+    project_instance = get_object_or_404(Project, pk=pk)
+
+    if not project_instance.user_can_edit(request.user):
+        return ForbiddenJsonResponse()
+
+    contacts = ClientContact.objects.filter(client=project_instance.client)
+    for contact in contacts:
+        if (
+            ProjectContact.objects.filter(
+                name=contact.name,
+                email=contact.email,
+                phone=contact.phone,
+                project=project_instance,
+            ).count()
+            > 0
+        ):
+            contacts = contacts.exclude(id=contact.id)
+
+    html = render_to_string(
+        "snippets/project_contacts_table.html",
+        {"project": project_instance, "client_contacts": contacts},
     )
     return HttpResponse(html)
 
 
 @login_required
 def roll_codename(request):
-    """
-    Fetch a unique codename for use with a model.
-    """
-
+    """Fetch a unique codename for use with a model."""
     try:
         codename_verified = False
+        new_codename = None
         while not codename_verified:
             new_codename = codenames.codename(uppercase=True)
-            try:
-                Project.objects.filter(codename__iequal=new_codename)
-                codename_verified = False  # pragma: no cover
-            except Exception:
-                codename_verified = True
-            try:
-                Client.objects.filter(codename__iequal=new_codename)
-                codename_verified = False  # pragma: no cover
-            except Exception:
+            if (
+                not Project.objects.filter(codename__iexact=new_codename).exists()
+                and not Client.objects.filter(codename__iexact=new_codename).exists()
+            ):
                 codename_verified = True
         data = {
             "result": "success",
-            "message": "Codename successfuly generated",
+            "message": "Codename successfully generated",
             "codename": new_codename,
         }
         logger.info(
@@ -146,6 +255,10 @@ def ajax_update_project_objectives(request):
         priority_class = request.POST.get("priority").replace("_priority", "")
         order = json.loads(data)
 
+        project_instance = get_object_or_404(Project, id=project_id)
+        if not project_instance.user_can_edit(request.user):
+            return ForbiddenJsonResponse()
+
         logger.info(
             "Received AJAX POST to update project %s's %s objectives in this order: %s",
             project_id,
@@ -157,6 +270,9 @@ def ajax_update_project_objectives(request):
             priority = ObjectivePriority.objects.get(priority__iexact=priority_class)
         except ObjectivePriority.DoesNotExist:
             priority = None
+
+        data = {"result": "success"}
+
         if priority:
             ignore = ["placeholder", "ignore"]
             counter = 1
@@ -177,52 +293,105 @@ def ajax_update_project_objectives(request):
                     logger.info("Ignored data-id value %s", objective_id)
         else:
             data = {"result": "specified priority, {}, is invalid".format(priority_class)}
-        # If all went well, return success
-        data = {"result": "success"}
     else:
         data = {"result": "error"}
     return JsonResponse(data)
 
 
-class ProjectObjectiveStatusUpdate(LoginRequiredMixin, SingleObjectMixin, View):
-    """
-    Update the ``status`` field of an individual :model:`rolodex.ProjectObjective`.
-    """
+class GenerateProjectReport(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Generates a project report"""
+
+    model = Project
+
+    def test_func(self):
+        return self.get_object().user_can_view(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
+    def get(self, *args, **kwargs):
+        project = self.get_object()
+
+        type_or_template_id = self.kwargs["type_or_template_id"]
+        try:
+            type_or_template_id = int(type_or_template_id)
+        except ValueError:
+            logger.debug("Report type or template ID is not numeric: %s", type_or_template_id)
+
+        report_config = ReportConfiguration.get_solo()
+
+        try:
+            if type_or_template_id == "json":
+                exporter = ExportProjectJson(project)
+                filename = exporter.render_filename(report_config.project_filename)
+                out = exporter.run()
+                mime = exporter.mime_type()
+            else:
+                template = (
+                    ReportTemplate.objects.filter(
+                        Q(doc_type__doc_type__iexact="project_docx") | Q(doc_type__doc_type__iexact="pptx")
+                    )
+                    .filter(Q(client=project.client) | Q(client__isnull=True))
+                    .select_related("doc_type")
+                    .get(pk=type_or_template_id)
+                )
+                exporter = template.exporter(project)
+                filename = exporter.render_filename(template.filename_override or report_config.project_filename)
+                out = exporter.run()
+                mime = exporter.mime_type()
+        except ReportExportTemplateError as error:
+            logger.error("Project report failed for project %s and user %s: %s", project.id, self.request.user, error)
+            messages.error(
+                self.request,
+                f"Error: {error}",
+                extra_tags="alert-danger",
+            )
+            return HttpResponseRedirect(reverse("rolodex:project_detail", kwargs={"pk": project.id}) + "#documents")
+        response = HttpResponse(out.getvalue(), content_type=mime)
+        add_content_disposition_header(response, filename)
+        return response
+
+
+class ProjectObjectiveStatusUpdate(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Update the ``status`` field of an individual :model:`rolodex.ProjectObjective`."""
 
     model = ProjectObjective
 
+    def test_func(self):
+        return self.get_object().project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        data = {}
-        self.object = self.get_object()
+        objective = self.get_object()
         try:
             success = False
             # Save the old status
-            old_status = self.object.status
+            old_status = objective.status
             # Get all available status
             all_status = ObjectiveStatus.objects.all()
+            new_status = all_status[0]
             total_status = all_status.count()
-            for index, status in enumerate(all_status):
+            for i, status in enumerate(all_status):
                 if status == old_status:
                     # Check if we're at the last status
-                    next_index = index + 1
+                    next_index = i + 1
                     if total_status - 1 >= next_index:
                         new_status = all_status[next_index]
                     # If at end, roll-over to the first status
                     else:
                         new_status = all_status[0]
 
-                    self.object.status = new_status
+                    objective.status = new_status
                     logger.info("Switching to %s", new_status)
-                    self.object.save()
+                    objective.save()
                     success = True
 
             if not success:
-                logger.warning(
-                    "Failed to match old status, %s, with any existing status, so set status to ``0``"
-                )
-                new_status = all_status[0]
-                self.object.status = new_status
-                self.object.save()
+                logger.warning("Failed to match old status, %s, with any existing status, so set status to ``0``")
+                objective.status = new_status
+                objective.save()
 
             # Prepare the JSON response data
             data = {
@@ -231,8 +400,8 @@ class ProjectObjectiveStatusUpdate(LoginRequiredMixin, SingleObjectMixin, View):
             }
             logger.info(
                 "Updated status of %s %s from %s to %s by request of %s",
-                self.object.__class__.__name__,
-                self.object.id,
+                objective.__class__.__name__,
+                objective.id,
                 old_status,
                 new_status,
                 self.request.user,
@@ -246,294 +415,375 @@ class ProjectObjectiveStatusUpdate(LoginRequiredMixin, SingleObjectMixin, View):
         return JsonResponse(data)
 
 
-class ProjectStatusToggle(LoginRequiredMixin, SingleObjectMixin, View):
-    """
-    Toggle the ``complete`` field of an individual :model:`rolodex.Project`.
-    """
+class ProjectStatusToggle(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Toggle the ``complete`` field of an individual :model:`rolodex.Project`."""
 
     model = Project
 
+    def test_func(self):
+        return self.get_object().user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
+        obj = self.get_object()
         try:
-            if self.object.complete:
-                self.object.complete = False
+            if obj.complete:
+                obj.complete = False
                 data = {
                     "result": "success",
-                    "message": "Project successfully marked as incomplete",
-                    "status": "In Progress",
+                    "message": "Project reopened.",
                     "toggle": 0,
                 }
             else:
-                self.object.complete = True
+                obj.complete = True
                 data = {
                     "result": "success",
-                    "message": "Project successfully marked as complete",
-                    "status": "Complete",
+                    "message": "Project marked complete.",
                     "toggle": 1,
                 }
-            self.object.save()
+            obj.save()
+            data["status"] = get_project_status_presentation(obj)
             logger.info(
                 "Toggled status of %s %s by request of %s",
-                self.object.__class__.__name__,
-                self.object.id,
+                obj.__class__.__name__,
+                obj.id,
                 self.request.user,
             )
         except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
-            data = {"result": "error", "message": "Could not update project status"}
+            data = {"result": "error", "message": "Could not update project status."}
 
         return JsonResponse(data)
 
 
-class ProjectObjectiveDelete(LoginRequiredMixin, SingleObjectMixin, View):
-    """
-    Delete an individual :model:`rolodex.ProjectObjective`.
-    """
+class ProjectObjectiveDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Delete an individual :model:`rolodex.ProjectObjective`."""
 
     model = ProjectObjective
 
+    def test_func(self):
+        return self.get_object().project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
-        obj_id = self.object.id
-        self.object.delete()
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
         data = {"result": "success", "message": "Objective successfully deleted!"}
         logger.info(
             "Deleted %s %s by request of %s",
-            self.object.__class__.__name__,
+            obj.__class__.__name__,
             obj_id,
             self.request.user,
         )
         return JsonResponse(data)
 
 
-class ProjectAssignmentDelete(LoginRequiredMixin, SingleObjectMixin, View):
-    """
-    Delete an individual :model:`rolodex.ProjectAssignment`.
-    """
+class ProjectAssignmentDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Delete an individual :model:`rolodex.ProjectAssignment`."""
 
     model = ProjectAssignment
 
+    def test_func(self):
+        return verify_user_is_privileged(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
-        obj_id = self.object.id
-        self.object.delete()
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
         data = {"result": "success", "message": "Assignment successfully deleted!"}
         logger.info(
             "Deleted %s %s by request of %s",
-            self.object.__class__.__name__,
+            obj.__class__.__name__,
             obj_id,
             self.request.user,
         )
         return JsonResponse(data)
 
 
-class ProjectNoteDelete(LoginRequiredMixin, SingleObjectMixin, UserPassesTestMixin, View):
-    """
-    Delete an individual :model:`rolodex.ProjectNote`.
-    """
+class ProjectNoteDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Delete an individual :model:`rolodex.ProjectNote`."""
 
     model = ProjectNote
 
     def test_func(self):
-        self.object = self.get_object()
-        return self.object.operator.id == self.request.user.id
+        obj = self.get_object()
+        return obj.operator.id == self.request.user.id or verify_user_is_privileged(self.request.user)
 
     def handle_no_permission(self):
-        messages.error(self.request, "You do not have permission to access that")
-        return redirect("home:dashboard")
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect(reverse("rolodex:project_detail", kwargs={"pk": self.get_object().project.pk}) + "#notes")
 
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
-        obj_id = self.object.id
-        self.object.delete()
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
         data = {"result": "success", "message": "Note successfully deleted!"}
         logger.info(
             "Deleted %s %s by request of %s",
-            self.object.__class__.__name__,
+            obj.__class__.__name__,
             obj_id,
             self.request.user,
         )
         return JsonResponse(data)
 
 
-class ClientNoteDelete(LoginRequiredMixin, SingleObjectMixin, UserPassesTestMixin, View):
-    """
-    Delete an individual :model:`rolodex.ClientNote`.
-    """
+class ClientNoteDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Delete an individual :model:`rolodex.ClientNote`."""
 
     model = ClientNote
 
     def test_func(self):
-        self.object = self.get_object()
-        return self.object.operator.id == self.request.user.id
+        obj = self.get_object()
+        return obj.operator.id == self.request.user.id or verify_user_is_privileged(self.request.user)
 
     def handle_no_permission(self):
-        messages.error(self.request, "You do not have permission to access that")
-        return redirect("home:dashboard")
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect(reverse("rolodex:client_detail", kwargs={"pk": self.get_object().client.pk}) + "#notes")
 
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
-        obj_id = self.object.id
-        self.object.delete()
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
         data = {"result": "success", "message": "Note successfully deleted!"}
         logger.info(
             "Deleted %s %s by request of %s",
-            self.object.__class__.__name__,
+            obj.__class__.__name__,
             obj_id,
             self.request.user,
         )
         return JsonResponse(data)
 
 
-class ClientContactDelete(LoginRequiredMixin, SingleObjectMixin, View):
-    """
-    Delete an individual :model:`rolodex.ClientContact`.
-    """
+class ClientContactDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Delete an individual :model:`rolodex.ClientContact`."""
 
     model = ClientContact
 
+    def test_func(self):
+        return self.get_object().client.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
-        obj_id = self.object.id
-        self.object.delete()
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
         data = {"result": "success", "message": "Contact successfully deleted!"}
         logger.info(
             "Deleted %s %s by request of %s",
-            self.object.__class__.__name__,
+            obj.__class__.__name__,
             obj_id,
             self.request.user,
         )
         return JsonResponse(data)
 
 
-class ProjectTargetDelete(LoginRequiredMixin, SingleObjectMixin, View):
-    """
-    Delete an individual :model:`rolodex.ProjectTarget`.
-    """
+class ClientInviteDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Delete an individual :model:`rolodex.ClientInvite`."""
+
+    model = ClientInvite
+
+    def test_func(self):
+        return verify_user_is_privileged(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
+    def post(self, *args, **kwargs):
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
+        data = {"result": "success", "message": "Invite successfully deleted!"}
+        logger.info(
+            "Deleted %s %s by request of %s",
+            obj.__class__.__name__,
+            obj_id,
+            self.request.user,
+        )
+        return JsonResponse(data)
+
+
+class ProjectInviteDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Delete an individual :model:`rolodex.ProjectInvite`."""
+
+    model = ProjectInvite
+
+    def test_func(self):
+        return verify_user_is_privileged(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
+    def post(self, *args, **kwargs):
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
+        data = {"result": "success", "message": "Invite successfully deleted!"}
+        logger.info(
+            "Deleted %s %s by request of %s",
+            obj.__class__.__name__,
+            obj_id,
+            self.request.user,
+        )
+        return JsonResponse(data)
+
+
+class ProjectTargetDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Delete an individual :model:`rolodex.ProjectTarget`."""
 
     model = ProjectTarget
 
+    def test_func(self):
+        return self.get_object().project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
-        obj_id = self.object.id
-        self.object.delete()
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
         data = {"result": "success", "message": "Target successfully deleted!"}
         logger.info(
             "Deleted %s %s by request of %s",
-            self.object.__class__.__name__,
+            obj.__class__.__name__,
             obj_id,
             self.request.user,
         )
         return JsonResponse(data)
 
 
-class ProjectTargetToggle(LoginRequiredMixin, SingleObjectMixin, View):
-    """
-    Toggle the ``compromised`` field of an individual :model:`rolodex.ProjecTarget`.
-    """
+class ProjectTargetToggle(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Toggle the ``compromised`` field of an individual :model:`rolodex.ProjectTarget`."""
 
     model = ProjectTarget
 
+    def test_func(self):
+        return self.get_object().project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
+        obj = self.get_object()
         try:
-            if self.object.compromised:
-                self.object.compromised = False
+            if obj.compromised:
+                obj.compromised = False
                 data = {
                     "result": "success",
-                    "message": "Target successfully marked as NOT compromised",
+                    "message": "Target successfully marked as NOT compromised.",
                     "toggle": 0,
                 }
             else:
-                self.object.compromised = True
+                obj.compromised = True
                 data = {
                     "result": "success",
-                    "message": "Target successfully marked as compromised",
+                    "message": "Target successfully marked as compromised.",
                     "toggle": 1,
                 }
-            self.object.save()
+            obj.save()
             logger.info(
                 "Toggled status of %s %s by request of %s",
-                self.object.__class__.__name__,
-                self.object.id,
+                obj.__class__.__name__,
+                obj.id,
                 self.request.user,
             )
         except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
-            data = {"result": "error", "message": "Could not update target status"}
+            data = {"result": "error", "message": "Could not update target status."}
 
         return JsonResponse(data)
 
 
-class ProjectScopeDelete(LoginRequiredMixin, SingleObjectMixin, View):
+class ProjectScopeDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
     """
     Delete an individual :model:`rolodex.ProjectScope`.
     """
 
     model = ProjectScope
 
+    def test_func(self):
+        return self.get_object().project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
-        obj_id = self.object.id
-        self.object.delete()
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
         data = {"result": "success", "message": "Scope list successfully deleted!"}
         logger.info(
             "Deleted %s %s by request of %s",
-            self.object.__class__.__name__,
+            obj.__class__.__name__,
             obj_id,
             self.request.user,
         )
         return JsonResponse(data)
 
 
-class ProjectTaskCreate(LoginRequiredMixin, SingleObjectMixin, View):
+class ProjectTaskCreate(RoleBasedAccessControlMixin, SingleObjectMixin, View):
     """
     Create a new :model:`rolodex.ProjectSubTask` for an individual :model:`ProjectObjective`.
     """
 
     model = ProjectObjective
 
+    def test_func(self):
+        return self.get_object().project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
+        obj = self.get_object()
         task = self.request.POST.get("task", None)
         deadline = self.request.POST.get("deadline", None)
         try:
             if task and deadline:
                 deadline = datetime.datetime.strptime(deadline, "%Y-%m-%d")
 
-                if deadline.date() <= self.object.deadline:
+                if deadline.date() <= obj.deadline:
                     new_task = ProjectSubTask(
-                        parent=self.object,
+                        parent=obj,
                         task=task,
                         deadline=deadline.date(),
                     )
                     new_task.save()
                     data = {
                         "result": "success",
-                        "message": "Task successfully saved",
+                        "message": "Task successfully saved.",
                     }
                     logger.info(
                         "Created new %s %s under %s %s by request of %s",
                         new_task.__class__.__name__,
                         new_task.id,
-                        self.object.__class__.__name__,
-                        self.object.id,
+                        obj.__class__.__name__,
+                        obj.id,
                         self.request.user,
                     )
                 else:
                     data = {
                         "result": "error",
-                        "message": "Your new due date must be before (or the same) as the objective due date",
+                        "message": "Your new due date must be before (or the same) as the objective due date.",
                     }
             else:
                 data = {
                     "result": "error",
-                    "message": "Your new task must have a valid task and due date",
+                    "message": "Your new task must have a valid task and due date.",
                 }
         except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
@@ -541,156 +791,177 @@ class ProjectTaskCreate(LoginRequiredMixin, SingleObjectMixin, View):
             logger.error(log_message)
             data = {
                 "result": "error",
-                "message": "Could not create new task with provided values",
+                "message": "Could not create new task with provided values.",
             }
 
         return JsonResponse(data)
 
 
-class ProjectTaskToggle(LoginRequiredMixin, SingleObjectMixin, View):
+class ProjectTaskToggle(RoleBasedAccessControlMixin, SingleObjectMixin, View):
     """
     Toggle the ``complete`` field of an individual :model:`rolodex.ProjectSubTask`.
     """
 
     model = ProjectSubTask
 
+    def test_func(self):
+        return self.get_object().parent.project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
+        obj = self.get_object()
         try:
-            if self.object.complete:
-                self.object.complete = False
-                self.object.marked_complete = None
+            if obj.complete:
+                obj.complete = False
                 data = {
                     "result": "success",
-                    "message": "Task successfully marked as incomplete",
+                    "message": "Task successfully marked as incomplete.",
                     "toggle": 0,
                 }
             else:
-                self.object.complete = True
-                self.object.marked_complete = datetime.date.today()
+                obj.complete = True
                 data = {
                     "result": "success",
-                    "message": "Task successfully marked as complete",
+                    "message": "Task successfully marked as complete.",
                     "toggle": 1,
                 }
-            self.object.save()
+            obj.save()
             logger.info(
                 "Toggled status of %s %s by request of %s",
-                self.object.__class__.__name__,
-                self.object.id,
+                obj.__class__.__name__,
+                obj.id,
                 self.request.user,
             )
         except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
-            data = {"result": "error", "message": "Could not update task status"}
+            data = {"result": "error", "message": "Could not update task status."}
 
         return JsonResponse(data)
 
 
-class ProjectObjectiveToggle(LoginRequiredMixin, SingleObjectMixin, View):
+class ProjectObjectiveToggle(RoleBasedAccessControlMixin, SingleObjectMixin, View):
     """
     Toggle the ``complete`` field of an individual :model:`rolodex.ProjectObjective`.
     """
 
     model = ProjectObjective
 
+    def test_func(self):
+        return self.get_object().project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
+        obj = self.get_object()
         try:
-            if self.object.complete:
-                self.object.complete = False
-                self.object.marked_complete = None
+            if obj.complete:
+                obj.complete = False
                 data = {
                     "result": "success",
-                    "message": "Objective successfully marked as incomplete",
+                    "message": "Objective successfully marked as incomplete.",
                     "toggle": 0,
                 }
             else:
-                self.object.complete = True
-                self.object.marked_complete = datetime.date.today()
+                obj.complete = True
                 data = {
                     "result": "success",
-                    "message": "Objective successfully marked as complete",
+                    "message": "Objective successfully marked as complete.",
                     "toggle": 1,
                 }
-            self.object.save()
+            obj.save()
             logger.info(
                 "Toggled status of %s %s by request of %s",
-                self.object.__class__.__name__,
-                self.object.id,
+                obj.__class__.__name__,
+                obj.id,
                 self.request.user,
             )
         except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
-            data = {"result": "error", "message": "Could not update objective status"}
+            data = {"result": "error", "message": "Could not update objective status."}
 
         return JsonResponse(data)
 
 
-class ProjectTaskDelete(LoginRequiredMixin, SingleObjectMixin, View):
+class ProjectTaskDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
     """
     Delete an individual :model:`rolodex.ProjectSubTask`.
     """
 
     model = ProjectSubTask
 
+    def test_func(self):
+        return self.get_object().parent.project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
-        obj_id = self.object.id
-        self.object.delete()
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
         data = {"result": "success", "message": "Task successfully deleted!"}
         logger.info(
             "Deleted %s %s by request of %s",
-            self.object.__class__.__name__,
+            obj.__class__.__name__,
             obj_id,
             self.request.user,
         )
         return JsonResponse(data)
 
 
-class ProjectTaskUpdate(LoginRequiredMixin, SingleObjectMixin, View):
+class ProjectTaskUpdate(RoleBasedAccessControlMixin, SingleObjectMixin, View):
     """
     Update an individual :model:`rolodex.ProjectSubTask`.
     """
 
     model = ProjectSubTask
 
+    def test_func(self):
+        return self.get_object().parent.project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
     def post(self, *args, **kwargs):
-        self.object = self.get_object()
+        obj = self.get_object()
         task = self.request.POST.get("task", None)
         deadline = self.request.POST.get("deadline", None)
         try:
             if task and deadline:
                 deadline = datetime.datetime.strptime(deadline, "%Y-%m-%d")
                 logger.info(deadline.date())
-                logger.info(self.object.deadline)
-                if deadline.date() <= self.object.parent.deadline:
-                    self.object.task = task
-                    self.object.deadline = deadline.date()
-                    self.object.save()
+                logger.info(obj.deadline)
+                if deadline.date() <= obj.parent.deadline:
+                    obj.task = task
+                    obj.deadline = deadline.date()
+                    obj.save()
                     data = {
                         "result": "success",
-                        "message": "Task successfully updated",
+                        "message": "Task successfully updated.",
                     }
                     logger.info(
                         "Updated %s %s by request of %s",
-                        self.object.__class__.__name__,
-                        self.object.id,
+                        obj.__class__.__name__,
+                        obj.id,
                         self.request.user,
                     )
                 else:
                     data = {
                         "result": "error",
-                        "message": "Your task due date must be before (or the same) as the objective due date",
+                        "message": "Your task due date must be before (or the same) as the objective due date.",
                     }
             else:
                 data = {
                     "result": "error",
-                    "message": "Task cannot be updated without a valid task and due date",
+                    "message": "Task cannot be updated without a valid task and due date.",
                 }
         except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
@@ -698,13 +969,13 @@ class ProjectTaskUpdate(LoginRequiredMixin, SingleObjectMixin, View):
             logger.error(log_message)
             data = {
                 "result": "error",
-                "message": "Could not update the task with provided values",
+                "message": "Could not update the task with provided values.",
             }
 
         return JsonResponse(data)
 
 
-class ProjectTaskRefresh(LoginRequiredMixin, SingleObjectMixin, View):
+class ProjectTaskRefresh(RoleBasedAccessControlMixin, SingleObjectMixin, View):
     """
     Return an updated version of the template following an update or delete action related
     to an individual :model:`rolodex.ProjectSubTask.
@@ -716,17 +987,23 @@ class ProjectTaskRefresh(LoginRequiredMixin, SingleObjectMixin, View):
 
     model = ProjectObjective
 
+    def test_func(self):
+        return self.get_object().project.user_can_view(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def get(self, *args, **kwargs):
-        self.object = self.get_object()
+        obj = self.get_object()
         html = render_to_string(
             "snippets/project_objective_subtasks.html",
-            {"objective": self.object},
+            {"objective": obj},
             request=self.request,
         )
         return HttpResponse(html)
 
 
-class ProjectObjectiveRefresh(LoginRequiredMixin, SingleObjectMixin, View):
+class ProjectObjectiveRefresh(RoleBasedAccessControlMixin, SingleObjectMixin, View):
     """
     Return an updated version of the template following an update action related
     to an individual :model:`rolodex.ProjectObjective`.
@@ -738,29 +1015,148 @@ class ProjectObjectiveRefresh(LoginRequiredMixin, SingleObjectMixin, View):
 
     model = ProjectObjective
 
+    def test_func(self):
+        return self.get_object().project.user_can_view(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def get(self, *args, **kwargs):
-        self.object = self.get_object()
+        obj = self.get_object()
         html = render_to_string(
             "snippets/project_objective_row.html",
-            {"objective": self.object},
+            {"objective": obj},
             request=self.request,
         )
         return HttpResponse(html)
 
 
-class ProjectScopeExport(LoginRequiredMixin, SingleObjectMixin, View):
+class ProjectScopeExport(RoleBasedAccessControlMixin, SingleObjectMixin, View):
     """Export scope list from an individual :model:`rolodex.ProjectScope` as a file."""
 
     model = ProjectScope
 
+    def test_func(self):
+        return self.get_object().project.user_can_view(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
     def get(self, *args, **kwargs):
         lines = []
-        self.object = self.get_object()
-        for row in self.object.scope.split("\n"):
+        obj = self.get_object()
+        for row in obj.scope.split("\n"):
             lines.append(row)
         response = HttpResponse(lines, content_type="text/plain")
-        response["Content-Disposition"] = f"attachment; filename={self.object.name}_scope.txt"
+        add_content_disposition_header(response, f"{obj.name}_scope.txt")
         return response
+
+
+class DeconflictionDelete(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """
+    Delete an individual :model:`rolodex.Deconfliction`.
+    """
+
+    model = Deconfliction
+
+    def test_func(self):
+        return self.get_object().project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
+    def post(self, *args, **kwargs):
+        obj = self.get_object()
+        obj_id = obj.id
+        obj.delete()
+        data = {"result": "success", "message": "Deconfliction event successfully deleted!"}
+        logger.info(
+            "Deleted %s %s by request of %s",
+            obj.__class__.__name__,
+            obj_id,
+            self.request.user,
+        )
+        return JsonResponse(data)
+
+
+class AssignProjectContact(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Copy an individual :model:`rolodex.ClientContact` to create a new :model:`rolodex.ProjectContact`"""
+
+    model = Project
+
+    def test_func(self):
+        return self.get_object().user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return ForbiddenJsonResponse()
+
+    def post(self, *args, **kwargs):
+        data = {"result": "success", "message": ""}
+        contact_id = self.request.POST.get("contact", None)
+        logger.info("Received AJAX POST to assign contact %s to project", contact_id)
+        try:
+            contact_id = int(contact_id)
+            if contact_id:
+                if contact_id < 0:
+                    return JsonResponse({"result": "error", "message": "You must choose a contact."})
+                contact_instance = get_object_or_404(ClientContact, id=contact_id)
+                if not contact_instance.client.user_can_edit(self.request.user):
+                    return ForbiddenJsonResponse()
+                contact_dict = to_dict(contact_instance, resolve_fk=True)
+                del contact_dict["client"]
+                del contact_dict["description"]
+                del contact_dict["primary"]
+
+                project = self.get_object()
+
+                # Check if this contact already exists in the project
+                if ProjectContact.objects.filter(**contact_dict, project=project).exists():
+                    message = "{} already exists in your project.".format(contact_instance.name)
+                    data = {"result": "error", "message": message}
+                else:
+                    # Carry over primary status only if no project contact is already primary
+                    project_has_primary = ProjectContact.objects.filter(project=project, primary=True).exists()
+                    inherit_primary = contact_instance.primary and not project_has_primary
+                    project_contact = ProjectContact(
+                        project=project,
+                        **contact_dict,
+                        description=contact_instance.description,
+                        primary=inherit_primary,
+                    )
+                    project_contact.save()
+
+                    message = "{} successfully added to your project.".format(contact_instance.name)
+                    data = {"result": "success", "message": message}
+                    logger.info(
+                        "Assigned %s %s to %s %s by request of %s",
+                        contact_instance.__class__.__name__,
+                        contact_instance.id,
+                        project.__class__.__name__,
+                        project.id,
+                        self.request.user,
+                    )
+        except ValueError:
+            data = {
+                "result": "error",
+                "message": "Submitted contact ID was not an integer.",
+            }
+            logger.error(
+                "Received an invalid (non-integer) contact IDs (%s) from a request submitted by %s",
+                contact_id,
+                self.request.user,
+            )
+        except Exception:  # pragma: no cover
+            data = {
+                "result": "error",
+                "message": "An exception prevented contact assignment.",
+            }
+            logger.exception(
+                "Encountered an error trying to create a project contact with contact ID %s from a request submitted by %s",
+                contact_id,
+                self.request.user,
+            )
+        return JsonResponse(data)
 
 
 ##################
@@ -770,14 +1166,62 @@ class ProjectScopeExport(LoginRequiredMixin, SingleObjectMixin, View):
 
 @login_required
 def index(request):
-    """
-    Display the main homepage.
-    """
+    """Display the main homepage."""
     return HttpResponseRedirect(reverse("home:dashboard"))
 
 
-@login_required
-def client_list(request):
+################
+# View Classes #
+################
+
+# CBVs related to :model:`rolodex.Client`
+
+
+class ClientLogoDownload(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Return the target :model:`rolodex.Client` logo file for download."""
+
+    model = Client
+
+    def test_func(self):
+        return self.get_object().user_can_view(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
+    def get(self, *args, **kwargs):
+        obj = self.get_object()
+        try:
+            file_path = os.path.join(settings.MEDIA_ROOT, obj.logo.path)
+        except ValueError as exc:
+            raise Http404 from exc
+        if os.path.exists(file_path):
+            # Detect the content type
+            content_type, _ = mimetypes.guess_type(file_path)
+            if content_type is None:
+                content_type = "application/octet-stream"
+
+            # Check if inline viewing is explicitly requested via query parameter
+            # Default to download (as_attachment=True) for security
+            inline_view = self.request.GET.get("view", "").lower() in ("1", "true", "yes")
+
+            response = FileResponse(
+                open(file_path, "rb"),
+                as_attachment=not inline_view,
+                filename=os.path.basename(file_path),
+                content_type=content_type,
+            )
+
+            # Add security headers to mitigate XSS risks
+            response["X-Content-Type-Options"] = "nosniff"
+            if inline_view:
+                response["Content-Security-Policy"] = "default-src 'none'; img-src 'self'"
+
+            return response
+        raise Http404
+
+
+class ClientListView(RoleBasedAccessControlMixin, ListView):
     """
     Display a list of all :model:`rolodex.Client`.
 
@@ -790,58 +1234,50 @@ def client_list(request):
 
     :template:`rolodex/client_list.html`
     """
-    # Check if a search parameter is in the request
-    try:
-        search_term = request.GET.get("client_search").strip()
-    except Exception:
-        search_term = ""
-    if search_term:
-        messages.success(
-            request,
-            "Displaying search results for: {}".format(search_term),
-            extra_tags="alert-success",
-        )
-        clients = Client.objects.filter(name__icontains=search_term).order_by("name")
-    else:
-        clients = Client.objects.all().order_by("name")
-    client_filter = ClientFilter(request.GET, queryset=clients)
-    return render(request, "rolodex/client_list.html", {"filter": client_filter})
+
+    model = Client
+    template_name = "rolodex/client_list.html"
+
+    def __init__(self):
+        super().__init__()
+        self.autocomplete = []
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = get_client_list(user)
+
+        self.autocomplete = queryset
+
+        # Check if a search parameter is in the request
+        try:
+            search_term = self.request.GET.get("client_search").strip()
+        except AttributeError:
+            search_term = ""
+
+        if search_term:
+            messages.success(
+                self.request,
+                "Displaying search results for: {}".format(search_term),
+                extra_tags="alert-success",
+            )
+            queryset = queryset.filter(name__icontains=search_term)
+        return queryset
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        queryset = self.get_queryset()
+        ctx["filter"] = ClientFilter(self.request.GET, queryset=queryset, request=self.request)
+        ctx["autocomplete"] = self.autocomplete
+        tags = get_tags_for_queryset(queryset)
+        ctx["tags"] = tags
+        ctx["autocomplete_data"] = {
+            "names": list(self.autocomplete.values_list("name", flat=True)),
+            "tags": list(tags.values_list("name", flat=True)),
+        }
+        return ctx
 
 
-@login_required
-def project_list(request):
-    """
-    Display a list of all :model:`rolodex.Project`.
-
-    **Context**
-
-    ``filter``
-        Instance of :filter:`rolodex.ProjectFilter`
-
-    **Template**
-
-    :template:`rolodex/project_list.html`
-    """
-    projects = (
-        Project.objects.select_related("client").all().order_by("complete", "client")
-    )
-    # Copy the GET request data
-    data = request.GET.copy()
-    # If user has not submitted their own filter, default to showing only active projects
-    if len(data) == 0:
-        data["complete"] = 0
-    filtered_list = ProjectFilter(data, queryset=projects)
-    return render(request, "rolodex/project_list.html", {"filter": filtered_list})
-
-
-################
-# View Classes #
-################
-
-# CBVs related to :model:`rolodex.Client`
-
-
-class ClientDetailView(LoginRequiredMixin, DetailView):
+class ClientDetailView(RoleBasedAccessControlMixin, DetailView):
     """
     Display an individual :model:`rolodex.Client`.
 
@@ -861,34 +1297,56 @@ class ClientDetailView(LoginRequiredMixin, DetailView):
 
     model = Client
 
+    def test_func(self):
+        return self.get_object().user_can_view(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        client_instance = get_object_or_404(Client, pk=self.kwargs.get("pk"))
-        domain_history = History.objects.select_related("domain").filter(
-            client=client_instance
+        client_instance = self.get_object()
+        domain_history = (
+            History.objects
+            .filter(client=client_instance)
+            .annotate(current_user_can_view=Exists(Project.for_user(self.request.user).filter(pk=OuterRef("project__pk"))))
+            .select_related("domain", "project", "operator", "activity_type")
         )
-        server_history = ServerHistory.objects.select_related("server").filter(
-            client=client_instance
+        server_history = (
+            ServerHistory.objects
+            .filter(client=client_instance)
+            .annotate(current_user_can_view=Exists(Project.for_user(self.request.user).filter(pk=OuterRef("project__pk"))))
+            .select_related("server", "project", "activity_type", "operator")
         )
-        projects = Project.objects.filter(client=client_instance)
-        client_domains = []
-        for domain in domain_history:
-            client_domains.append(domain)
-        client_servers = []
-        for server in server_history:
-            client_servers.append(server)
-        client_vps = []
-        for project in projects:
-            vps_queryset = TransientServer.objects.filter(project=project)
-            for vps in vps_queryset:
-                client_vps.append(vps)
-        ctx["domains"] = client_domains
-        ctx["servers"] = client_servers
+        projects = (
+            Project.objects
+            .filter(client=client_instance)
+            .annotate(current_user_can_view=Exists(Project.for_user(self.request.user).filter(pk=OuterRef("pk"))))
+            .prefetch_related("projectassignment_set", "projectassignment_set__operator")
+            .select_related("project_type", "client")
+        )
+        client_vps = (
+            TransientServer.objects
+            .filter(project__in=projects)
+            .annotate(current_user_can_view=Exists(Project.for_user(self.request.user).filter(pk=OuterRef("project__pk"))))
+            .select_related("project", "activity_type")
+        )
+
+        ctx["domains"] = domain_history
+        ctx["servers"] = server_history
         ctx["vps"] = client_vps
+        ctx["projects"] = projects
+        ctx["client_extra_fields_spec"] = ExtraFieldSpec.objects.filter(target_model=Client._meta.label)
+
         return ctx
 
 
-class ClientCreate(LoginRequiredMixin, CreateView):
+class ClientExtraFieldJson(ExtraFieldJsonView):
+    model = Client
+
+
+class ClientCreate(RoleBasedAccessControlMixin, CreateView):
     """
     Create an individual :model:`rolodex.Client`.
 
@@ -908,6 +1366,13 @@ class ClientCreate(LoginRequiredMixin, CreateView):
     form_class = ClientForm
     template_name = "rolodex/client_form.html"
 
+    def test_func(self):
+        return verify_user_is_privileged(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
     def get_success_url(self):
         messages.success(
             self.request,
@@ -919,43 +1384,52 @@ class ClientCreate(LoginRequiredMixin, CreateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["cancel_link"] = reverse("rolodex:clients")
-        if self.request.POST:
-            ctx["contacts"] = ClientContactFormSet(self.request.POST, prefix="poc")
-        else:
-            # Add extra forms to aid in configuration of a new client
-            contacts = ClientContactFormSet(prefix="poc")
-            contacts.extra = 1
-            # Assign the re-configured formsets to context vars
-            ctx["contacts"] = contacts
+        ctx["contacts"] = self.contacts
+        ctx["invites"] = self.invites
         return ctx
 
-    def form_valid(self, form):
-        # Get form context data – used for validation of inline forms
-        ctx = self.get_context_data()
-        contacts = ctx["contacts"]
+    def get(self, request, *args, **kwargs):
+        self.object = None
+        self.contacts = ClientContactFormSet(prefix="poc")
+        self.invites = ClientInviteFormSet(prefix="invite")
+        return super().get(request, *args, **kwargs)
 
-        # Now validate inline formsets
-        # Validation is largely handled by the custom base formset, ``BaseClientContactInlineFormSet``
+    def post(self, request, *args, **kwargs):
+        self.object = None
+        form = self.get_form()
+        self.contacts = ClientContactFormSet(request.POST, prefix="poc")
+        self.invites = ClientInviteFormSet(request.POST, prefix="invite")
+        if form.is_valid() and self.contacts.is_valid() and self.invites.is_valid():
+            return self.form_valid(form)
+        return self.form_invalid(form)
+
+    def form_valid(self, form):
         try:
             with transaction.atomic():
                 # Save the parent form – will rollback if a child fails validation
-                self.object = form.save()
-
-                contacts_valid = contacts.is_valid()
-                if contacts_valid:
-                    contacts.instance = self.object
-                    contacts.save()
-
-                if form.is_valid() and contacts_valid:
-                    return super().form_valid(form)
-                # Raise an error to rollback transactions
-                raise forms.ValidationError(_("Invalid form data"))
-        # Otherwise return ``form_invalid`` and display errors
+                obj = form.save(commit=False)
+                self.object = obj
+                obj.save()
+                try:
+                    for i in self.contacts.save(commit=False):
+                        i.client = obj
+                        i.save()
+                    for i in self.invites.save(commit=False):
+                        i.client = obj
+                        i.save()
+                    self.contacts.save_m2m()
+                    self.invites.save_m2m()
+                    form.save_m2m()
+                except IntegrityError:  # pragma: no cover
+                    form.add_error(None, "You cannot have duplicate contacts or invites for a client.")
+                    return self.form_invalid(form)
+                return HttpResponseRedirect(self.get_success_url())
         except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             message = template.format(type(exception).__name__, exception.args)
-            logger.error(message)
+            logger.exception(message)
             return super().form_invalid(form)
+
 
     def get_initial(self):
         # Generate and assign a unique codename to the project
@@ -963,16 +1437,16 @@ class ClientCreate(LoginRequiredMixin, CreateView):
         codename = ""
         while not codename_verified:
             codename = codenames.codename(uppercase=True)
-            try:
-                Project.objects.filter(codename__iequal=codename)
-            except Exception:
+            clients = Client.objects.filter(codename__iexact="foo")
+            if not clients:
                 codename_verified = True
         return {
             "codename": codename,
+            "extra_fields": ExtraFieldSpec.initial_json(self.model),
         }
 
 
-class ClientUpdate(LoginRequiredMixin, UpdateView):
+class ClientUpdate(RoleBasedAccessControlMixin, UpdateView):
     """
     Update an individual :model:`rolodex.Client`.
 
@@ -992,6 +1466,13 @@ class ClientUpdate(LoginRequiredMixin, UpdateView):
     form_class = ClientForm
     template_name = "rolodex/client_form.html"
 
+    def test_func(self):
+        return verify_user_is_privileged(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
     def get_success_url(self):
         messages.success(
             self.request,
@@ -1002,36 +1483,43 @@ class ClientUpdate(LoginRequiredMixin, UpdateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["cancel_link"] = reverse(
-            "rolodex:client_detail", kwargs={"pk": self.object.id}
-        )
+        ctx["cancel_link"] = reverse("rolodex:client_detail", kwargs={"pk": self.object.id})
         if self.request.POST:
-            ctx["contacts"] = ClientContactFormSet(
-                self.request.POST, prefix="poc", instance=self.object
-            )
+            ctx["contacts"] = ClientContactFormSet(self.request.POST, prefix="poc", instance=self.object)
+            ctx["invites"] = ClientInviteFormSet(self.request.POST, prefix="invite", instance=self.object)
         else:
-            ctx["contacts"] = ClientContactFormSet(prefix="poc", instance=self.object)
+            contacts = ClientContactFormSet(prefix="poc", instance=self.object)
+            ctx["contacts"] = contacts
+            invites = ClientInviteFormSet(prefix="invite", instance=self.object)
+            ctx["invites"] = invites
         return ctx
 
     def form_valid(self, form):
         # Get form context data – used for validation of inline forms
         ctx = self.get_context_data()
         contacts = ctx["contacts"]
+        invites = ctx["invites"]
 
         # Now validate inline formsets
-        # Validation is largely handled by the custom base formset, ``BaseClientContactInlineFormSet``
         try:
             with transaction.atomic():
                 # Save the parent form – will rollback if a child fails validation
-                self.object = form.save()
+                obj = form.save(commit=False)
 
-                contacts_valid = contacts.is_valid()
-                if contacts_valid:
-                    contacts.instance = self.object
-                    contacts.save()
+                formsets_valid = contacts.is_valid() and invites.is_valid()
+                if formsets_valid:
+                    contacts.instance = obj
+                    invites.instance = obj
+                    try:
+                        contacts.save()
+                        invites.save()
+                    except IntegrityError:  # pragma: no cover
+                        form.add_error(None, "You cannot have duplicate contacts or invites for a client.")
 
-                if form.is_valid() and contacts_valid:
-                    return super().form_valid(form)
+                if form.is_valid() and formsets_valid:
+                    obj.save()
+                    form.save_m2m()
+                    return HttpResponseRedirect(self.get_success_url())
                 # Raise an error to rollback transactions
                 raise forms.ValidationError(_("Invalid form data"))
         # Otherwise return ``form_invalid`` and display errors
@@ -1042,7 +1530,7 @@ class ClientUpdate(LoginRequiredMixin, UpdateView):
             return super().form_invalid(form)
 
 
-class ClientDelete(LoginRequiredMixin, DeleteView):
+class ClientDelete(RoleBasedAccessControlMixin, DeleteView):
     """
     Delete an individual :model:`rolodex.Client`.
 
@@ -1064,18 +1552,23 @@ class ClientDelete(LoginRequiredMixin, DeleteView):
     template_name = "confirm_delete.html"
     success_url = reverse_lazy("rolodex:clients")
 
+    def test_func(self):
+        return verify_user_is_privileged(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         queryset = kwargs["object"]
         ctx["object_type"] = "client and all associated data"
         ctx["object_to_be_deleted"] = queryset.name
-        ctx["cancel_link"] = reverse(
-            "rolodex:client_detail", kwargs={"pk": self.object.id}
-        )
+        ctx["cancel_link"] = reverse("rolodex:client_detail", kwargs={"pk": self.object.id})
         return ctx
 
 
-class ClientNoteCreate(LoginRequiredMixin, CreateView):
+class ClientNoteCreate(RoleBasedAccessControlMixin, CreateView):
     """
     Create an individual :model:`rolodex.ClientNote`.
 
@@ -1095,39 +1588,40 @@ class ClientNoteCreate(LoginRequiredMixin, CreateView):
     form_class = ClientNoteForm
     template_name = "note_form.html"
 
+    def test_func(self):
+        self.client_instance = get_object_or_404(Client, pk=self.kwargs.get("pk"))
+        return self.client_instance.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
     def get_success_url(self):
         messages.success(
             self.request,
             "Note successfully added to this client.",
             extra_tags="alert-success",
         )
-        return "{}#notes".format(
-            reverse("rolodex:client_detail", kwargs={"pk": self.object.client.id})
-        )
+        return "{}#notes".format(reverse("rolodex:client_detail", kwargs={"pk": self.object.client.id}))
 
     def get_initial(self):
-        client_instance = get_object_or_404(Client, pk=self.kwargs.get("pk"))
-        client = client_instance
-        return {"client": client, "operator": self.request.user}
+        return {"client": self.client_instance, "operator": self.request.user}
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        client_instance = get_object_or_404(Client, pk=self.kwargs.get("pk"))
-        ctx["note_object"] = client_instance
-        ctx["cancel_link"] = "{}#notes".format(
-            reverse("rolodex:client_detail", kwargs={"pk": client_instance.id})
-        )
+        ctx["note_object"] = self.client_instance
+        ctx["cancel_link"] = "{}#notes".format(reverse("rolodex:client_detail", kwargs={"pk": self.client_instance.id}))
         return ctx
 
     def form_valid(self, form, **kwargs):
-        self.object = form.save(commit=False)
-        self.object.operator = self.request.user
-        self.object.client_id = self.kwargs.get("pk")
-        self.object.save()
+        obj = form.save(commit=False)
+        obj.operator = self.request.user
+        obj.client_id = self.kwargs.get("pk")
+        obj.save()
         return super().form_valid(form)
 
 
-class ClientNoteUpdate(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
+class ClientNoteUpdate(RoleBasedAccessControlMixin, UpdateView):
     """
     Update an individual :model:`rolodex.ClientNote`.
 
@@ -1148,34 +1642,93 @@ class ClientNoteUpdate(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     template_name = "note_form.html"
 
     def test_func(self):
-        self.object = self.get_object()
-        return self.object.operator.id == self.request.user.id
+        obj = self.get_object()
+        return obj.operator.id == self.request.user.id or verify_user_is_privileged(self.request.user)
 
     def handle_no_permission(self):
-        messages.error(self.request, "You do not have permission to access that")
-        return redirect("home:dashboard")
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect(reverse("rolodex:client_detail", kwargs={"pk": self.get_object().client.pk}) + "#notes")
 
     def get_success_url(self):
-        messages.success(
-            self.request, "Note successfully updated.", extra_tags="alert-success"
-        )
-        return "{}#notes".format(
-            reverse("rolodex:client_detail", kwargs={"pk": self.object.client.id})
-        )
+        messages.success(self.request, "Note successfully updated.", extra_tags="alert-success")
+        return "{}#notes".format(reverse("rolodex:client_detail", kwargs={"pk": self.object.client.id}))
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["note_object"] = self.object.client
-        ctx["cancel_link"] = "{}#notes".format(
-            reverse("rolodex:client_detail", kwargs={"pk": self.object.client.id})
-        )
+        ctx["cancel_link"] = "{}#notes".format(reverse("rolodex:client_detail", kwargs={"pk": self.object.client.id}))
         return ctx
 
 
 # CBVs related to :model:`rolodex.Project`
 
 
-class ProjectDetailView(LoginRequiredMixin, DetailView):
+class ProjectListView(RoleBasedAccessControlMixin, ListView):
+    """
+    Display a list of all :model:`rolodex.Project`.
+
+    **Context**
+
+    ``filter``
+        Instance of :filter:`rolodex.ProjectFilter`
+
+    **Template**
+
+    :template:`rolodex/project_list.html`
+    """
+
+    model = Project
+    template_name = "rolodex/project_list.html"
+
+    def __init__(self):
+        super().__init__()
+        self.autocomplete = []
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = (
+            get_project_list(user)
+            .prefetch_related(
+                "tags",
+                "client__tags",
+                "projectassignment_set",
+                "projectassignment_set__operator",
+            )
+            .select_related()
+            .defer("extra_fields")
+        )
+        self.autocomplete = queryset
+        return queryset
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        queryset = self.get_queryset()
+        # Copy the GET request data
+        data = self.request.GET.copy()
+        # If user has not submitted their own filter, default to showing only active projects
+        if len(data) == 0:
+            data["complete"] = 0
+        ctx["filter"] = ProjectFilter(data, queryset=queryset, request=self.request)
+        ctx["autocomplete"] = self.autocomplete
+        tags = get_tags_for_queryset(queryset)
+        ctx["tags"] = tags
+        ctx["autocomplete_data"] = {
+            "clients": list(
+                self.autocomplete.order_by("client__name")
+                .values_list("client__name", flat=True)
+                .distinct()
+            ),
+            "codenames": list(
+                self.autocomplete.order_by("codename")
+                .values_list("codename", flat=True)
+                .distinct()
+            ),
+            "tags": list(tags.values_list("name", flat=True)),
+        }
+        return ctx
+
+
+class ProjectDetailView(RoleBasedAccessControlMixin, DetailView):
     """
     Display an individual :model:`rolodex.Project`.
 
@@ -1186,8 +1739,62 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
 
     model = Project
 
+    def test_func(self):
+        return self.get_object().user_can_view(self.request.user)
 
-class ProjectCreate(LoginRequiredMixin, CreateView):
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
+    def get_context_data(self, object: Project, **kwargs):
+        ctx = super().get_context_data(object=object, **kwargs)
+        ctx["project_extra_fields_spec"] = ExtraFieldSpec.objects.filter(target_model=Project._meta.label)
+        ctx["project_status"] = get_project_status_presentation(object)
+        ctx["can_edit_project"] = object.user_can_edit(self.request.user)
+        ctx["export_templates"] = ReportTemplate.objects.filter(
+            Q(doc_type__doc_type__iexact="project_docx") | Q(doc_type__doc_type__iexact="pptx")
+        ).filter(Q(client=object.client) | Q(client__isnull=True))
+        ctx.update(CollabModelUpdate.context_data(
+            self.request.user,
+            object.pk,
+            None,
+            CollabModelUpdate.collab_jwt_claims("project", object),
+        ))
+
+        bhc = BloodHoundConfiguration.get_solo()
+        ctx["global_bloodhound_config"] = bhc
+
+        if object.has_bloodhound_api():
+            ctx["bh_api"] = object
+        elif bhc.allows_project_fallback():
+            ctx["bh_api"] = bhc
+        else:
+            ctx["bh_api"] = None
+
+        return ctx
+
+
+class ProjectExtraFieldJson(ExtraFieldJsonView):
+    model = Project
+
+
+class ProjectExtraFieldRichTextPreview(ExtraFieldRichTextPreviewView):
+    model = Project
+
+    def build_exporter(self, obj):
+        return ExportProjectJson(obj)
+
+    def extract_rendered_field(self, exporter, base_context, field_name):
+        value = base_context.get("project", {}).get("extra_fields", {}).get(field_name)
+        if value is None:
+            return ""
+        return str(value.__html__()) if hasattr(value, "__html__") else str(value)
+
+    def get_client(self, obj):
+        return obj.client
+
+
+class ProjectCreate(RoleBasedAccessControlMixin, CreateView):
     """
     Create an individual :model:`rolodex.Project` with zero or more
     :model:`rolodex.ProjectAssignment` and :model:`rolodex.ProjectObjective`.
@@ -1195,15 +1802,11 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
     **Context**
 
     ``client``
-        Instance of :model:`rolodex.CLient` associated with this project
-    ``objectives``
-        Instance of the `ProjectObjectiveFormSet()` formset
+        Instance of :model:`rolodex.Client` associated with this project
     ``assignments``
         Instance of the `ProjectAssignmentFormSet()` formset
-    ``scopes``
-        Instance of the `ProjectScopeFormSet()` formset
-    ``targets``
-        Instance of the `ProjectTargetFormSet()` formset
+    ``invites``
+        Instance of the `ProjectInviteFormSet()` formset
     ``cancel_link``
         Link for the form's Cancel button to return to projects list page
 
@@ -1215,6 +1818,13 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
     model = Project
     form_class = ProjectForm
     template_name = "rolodex/project_form.html"
+
+    def test_func(self):
+        return Project.user_can_create(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -1239,85 +1849,57 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
         ctx = super().get_context_data(**kwargs)
         ctx["client"] = self.client
         if self.client:
-            ctx["cancel_link"] = reverse(
-                "rolodex:client_detail", kwargs={"pk": self.client.pk}
-            )
+            ctx["cancel_link"] = reverse("rolodex:client_detail", kwargs={"pk": self.client.pk})
         else:
             ctx["cancel_link"] = reverse("rolodex:projects")
-        if self.request.POST:
-            ctx["objectives"] = ProjectObjectiveFormSet(self.request.POST, prefix="obj")
-            ctx["assignments"] = ProjectAssignmentFormSet(
-                self.request.POST, prefix="assign"
-            )
-            ctx["scopes"] = ProjectScopeFormSet(self.request.POST, prefix="scope")
-            ctx["targets"] = ProjectTargetFormSet(self.request.POST, prefix="target")
-        else:
-            # Add extra forms to aid in configuration of a new project
-            objectives = ProjectObjectiveFormSet(prefix="obj")
-            objectives.extra = 1
-            assignments = ProjectAssignmentFormSet(prefix="assign")
-            assignments.extra = 1
-            scopes = ProjectScopeFormSet(prefix="scope")
-            scopes.extra = 1
-            targets = ProjectTargetFormSet(prefix="target")
-            targets.extra = 1
-            # Assign the re-configured formsets to context vars
-            ctx["objectives"] = objectives
-            ctx["assignments"] = assignments
-            ctx["scopes"] = scopes
-            ctx["targets"] = targets
+        ctx["assignments"] = self.assignments
+        ctx["invites"] = self.invites
         return ctx
 
-    def form_valid(self, form):
-        # Get form context data – used for validation of inline forms
-        ctx = self.get_context_data()
-        scopes = ctx["scopes"]
-        targets = ctx["targets"]
-        objectives = ctx["objectives"]
-        assignments = ctx["assignments"]
+    def get(self, request, *args, **kwargs):
+        self.object = None
+        self.assignments = ProjectAssignmentFormSet(prefix="assign")
+        self.assignments.extra = 1
+        self.invites = ProjectInviteFormSet(prefix="invite")
+        self.invites.extra = 1
+        return super().get(request, *args, **kwargs)
 
-        # Now validate inline formsets
-        # Validation is largely handled by the custom base formset, ``BaseProjectInlineFormSet``
+    def post(self, request, *args, **kwargs):
+        self.object = None
+        form = self.get_form()
+        self.assignments = ProjectAssignmentFormSet(request.POST, prefix="assign")
+        self.invites = ProjectInviteFormSet(request.POST, prefix="invite")
+        if form.is_valid() and self.assignments.is_valid() and self.invites.is_valid():
+            return self.form_valid(form)
+        return self.form_invalid(form)
+
+    def form_valid(self, form):
+        form.instance.extra_fields = ExtraFieldSpec.initial_json(self.model)
+
         try:
             with transaction.atomic():
                 # Save the parent form – will rollback if a child fails validation
-                self.object = form.save()
-
-                objectives_valid = objectives.is_valid()
-                if objectives_valid:
-                    objectives.instance = self.object
-                    objectives.save()
-
-                assignments_valid = assignments.is_valid()
-                if assignments_valid:
-                    assignments.instance = self.object
-                    assignments.save()
-
-                scopes_valid = scopes.is_valid()
-                if scopes_valid:
-                    scopes.instance = self.object
-                    scopes.save()
-
-                targets_valid = targets.is_valid()
-                if targets_valid:
-                    targets.instance = self.object
-                    targets.save()
-
-                if (
-                    form.is_valid()
-                    and objectives_valid
-                    and assignments_valid
-                    and scopes_valid
-                    and targets_valid
-                ):
-                    return super().form_valid(form)
-                # Raise an error to rollback transactions
-                raise forms.ValidationError(_("Invalid form data"))
-        # Otherwise return ``form_invalid`` and display errors
+                obj = form.save(commit=False)
+                self.object = obj
+                obj.save()
+                try:
+                    for i in self.assignments.save(commit=False):
+                        i.project = obj
+                        i.save()
+                    for i in self.invites.save(commit=False):
+                        i.project = obj
+                        i.save()
+                    self.assignments.save_m2m()
+                    self.invites.save_m2m()
+                    form.save_m2m()
+                except IntegrityError:  # pragma: no cover
+                    form.add_error(None, "You cannot have duplicate assignments or invites for a project.")
+                    return self.form_invalid(form)
+                return HttpResponseRedirect(self.get_success_url())
         except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             message = template.format(type(exception).__name__, exception.args)
-            logger.error(message)
+            logger.exception(message)
             return super().form_invalid(form)
 
     def get_initial(self):
@@ -1326,9 +1908,8 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
         codename = ""
         while not codename_verified:
             codename = codenames.codename(uppercase=True)
-            try:
-                Project.objects.filter(codename__iequal=codename)
-            except Exception:
+            projects = Project.objects.filter(codename__iexact=codename)
+            if not projects:
                 codename_verified = True
         return {
             "client": self.client,
@@ -1336,7 +1917,7 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
         }
 
 
-class ProjectUpdate(LoginRequiredMixin, UpdateView):
+class ProjectUpdate(RoleBasedAccessControlMixin, UpdateView):
     """
     Update an individual :model:`rolodex.Project`.
 
@@ -1344,14 +1925,10 @@ class ProjectUpdate(LoginRequiredMixin, UpdateView):
 
     ``object``
         Instance of :model:`rolodex.Project` being updated
-    ``objectives``
-        Instance of the `ProjectObjectiveFormSet()` formset
     ``assignments``
         Instance of the `ProjectAssignmentFormSet()` formset
-    ``scopes``
-        Instance of the `ProjectScopeFormSet()` formset
-    ``targets``
-        Instance of the `ProjectTargetFormSet()` formset
+    ``invites``
+        Instance of the `ProjectInviteFormSet()` formset
     ``cancel_link``
         Link for the form's Cancel button to return to project's detail page
 
@@ -1364,95 +1941,64 @@ class ProjectUpdate(LoginRequiredMixin, UpdateView):
     form_class = ProjectForm
     template_name = "rolodex/project_form.html"
 
+    def test_func(self):
+        return verify_user_is_privileged(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["object"] = self.get_object()
-        ctx["cancel_link"] = reverse(
-            "rolodex:project_detail", kwargs={"pk": self.object.pk}
-        )
-        if self.request.POST:
-            ctx["objectives"] = ProjectObjectiveFormSet(
-                self.request.POST, prefix="obj", instance=self.object
-            )
-            ctx["assignments"] = ProjectAssignmentFormSet(
-                self.request.POST, prefix="assign", instance=self.object
-            )
-            ctx["scopes"] = ProjectScopeFormSet(
-                self.request.POST, prefix="scope", instance=self.object
-            )
-            ctx["targets"] = ProjectTargetFormSet(
-                self.request.POST, prefix="target", instance=self.object
-            )
-        else:
-            ctx["objectives"] = ProjectObjectiveFormSet(
-                prefix="obj", instance=self.object
-            )
-            ctx["assignments"] = ProjectAssignmentFormSet(
-                prefix="assign", instance=self.object
-            )
-            ctx["scopes"] = ProjectScopeFormSet(prefix="scope", instance=self.object)
-            ctx["targets"] = ProjectTargetFormSet(prefix="target", instance=self.object)
+        ctx["cancel_link"] = reverse("rolodex:project_detail", kwargs={"pk": self.object.pk})
+        ctx["assignments"] = self.assignments
+        ctx["invites"] = self.invites
         return ctx
 
     def get_success_url(self):
-        messages.success(
-            self.request, "Project successfully saved.", extra_tags="alert-success"
-        )
+        messages.success(self.request, "Project successfully saved.", extra_tags="alert-success")
         return reverse("rolodex:project_detail", kwargs={"pk": self.object.pk})
 
-    def form_valid(self, form):
-        # Get form context data – used for validation of inline forms
-        ctx = self.get_context_data()
-        scopes = ctx["scopes"]
-        targets = ctx["targets"]
-        objectives = ctx["objectives"]
-        assignments = ctx["assignments"]
+    def get(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        self.assignments = ProjectAssignmentFormSet(prefix="assign", instance=self.object)
+        if self.object.projectassignment_set.all().count() < 1:
+            self.assignments.extra = 1
+        self.invites = ProjectInviteFormSet(prefix="invite", instance=self.object)
+        if self.object.projectinvite_set.all().count() < 1:
+            self.invites.extra = 1
+        return super().get(request, *args, **kwargs)
 
-        # Now validate inline formsets
-        # Validation is largely handled by the custom base formset, ``BaseProjectInlineFormSet``
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        form = self.get_form()
+        self.assignments = ProjectAssignmentFormSet(request.POST, prefix="assign", instance=self.object)
+        self.invites = ProjectInviteFormSet(request.POST, prefix="invite", instance=self.object)
+        if form.is_valid() and self.assignments.is_valid() and self.invites.is_valid():
+            return self.form_valid(form)
+        return self.form_invalid(form)
+
+    def form_valid(self, form):
         try:
             with transaction.atomic():
                 # Save the parent form – will rollback if a child fails validation
-                self.object = form.save()
-
-                objectives_valid = objectives.is_valid()
-                if objectives_valid:
-                    objectives.instance = self.object
-                    objectives.save()
-
-                assignments_valid = assignments.is_valid()
-                if assignments_valid:
-                    assignments.instance = self.object
-                    assignments.save()
-
-                scopes_valid = scopes.is_valid()
-                if scopes_valid:
-                    scopes.instance = self.object
-                    scopes.save()
-
-                targets_valid = targets.is_valid()
-                if targets_valid:
-                    targets.instance = self.object
-                    targets.save()
-
-                # Proceed with form submission
-                if (
-                    form.is_valid()
-                    and objectives_valid
-                    and assignments_valid
-                    and scopes_valid
-                    and targets_valid
-                ):
-                    return super().form_valid(form)
-                # Raise an error to rollback transactions
-                raise forms.ValidationError(_("Invalid form data"))
-        # Otherwise return ``form_invalid`` and display errors
+                obj = form.save(commit=False)
+                obj.save()
+                try:
+                    self.assignments.save()
+                    self.invites.save()
+                    form.save_m2m()
+                except IntegrityError:  # pragma: no cover
+                    form.add_error(None, "You cannot have duplicate assignments or invites for a project.")
+                    return self.form_invalid(form)
+                return HttpResponseRedirect(self.get_success_url())
         except Exception:
-            logger.exception("Failed to update the project")
+            logger.exception("Failed to update the project.")
             return super().form_invalid(form)
 
 
-class ProjectDelete(LoginRequiredMixin, DeleteView):
+class ProjectDelete(RoleBasedAccessControlMixin, DeleteView):
     """
     Delete an individual :model:`rolodex.Project`.
 
@@ -1473,23 +2019,162 @@ class ProjectDelete(LoginRequiredMixin, DeleteView):
     model = Project
     template_name = "confirm_delete.html"
 
+    def test_func(self):
+        return verify_user_is_privileged(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         queryset = kwargs["object"]
         ctx["object_type"] = "project and all associated data (reports, evidence, etc.)"
         ctx["object_to_be_deleted"] = queryset
-        ctx["cancel_link"] = "{}".format(
-            reverse("rolodex:project_detail", kwargs={"pk": self.object.id})
-        )
+        ctx["cancel_link"] = "{}".format(reverse("rolodex:project_detail", kwargs={"pk": self.object.id}))
         return ctx
 
     def get_success_url(self):
-        return "{}#history".format(
-            reverse("rolodex:client_detail", kwargs={"pk": self.object.client.id})
-        )
+        return "{}#history".format(reverse("rolodex:client_detail", kwargs={"pk": self.object.client.id}))
 
 
-class ProjectNoteCreate(LoginRequiredMixin, CreateView):
+class ProjectComponentsUpdate(RoleBasedAccessControlMixin, UpdateView):
+    """
+    Update related components of an individual :model:`rolodex.Project`. This view is accessible
+    to regular users to add, edit, and remove white cards, objectives, scopes, and targets..
+
+    **Context**
+
+    ``object``
+        Instance of :model:`rolodex.Project` being updated
+    ``whitecards``
+        Instance of the `WhiteCardFormSet()` formset
+    ``objectives``
+        Instance of the `ProjectObjectiveFormSet()` formset
+    ``scopes``
+        Instance of the `ProjectScopeFormSet()` formset
+    ``targets``
+        Instance of the `ProjectTargetFormSet()` formset
+    ``cancel_link``
+        Link for the form's Cancel button to return to project's detail page
+
+    **Template**
+
+    :template:`rolodex/project_form.html`
+    """
+
+    model = Project
+    form_class = ProjectComponentForm
+    template_name = "rolodex/project_form.html"
+
+    def test_func(self):
+        return self.get_object().user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["object"] = self.get_object()
+        ctx["cancel_link"] = reverse("rolodex:project_detail", kwargs={"pk": self.object.pk})
+        if self.request.POST:
+            ctx["objectives"] = ProjectObjectiveFormSet(self.request.POST, prefix="obj", instance=self.object)
+            ctx["scopes"] = ProjectScopeFormSet(self.request.POST, prefix="scope", instance=self.object)
+            ctx["targets"] = ProjectTargetFormSet(self.request.POST, prefix="target", instance=self.object)
+            ctx["whitecards"] = WhiteCardFormSet(self.request.POST, prefix="card", instance=self.object)
+            ctx["contacts"] = ProjectContactFormSet(self.request.POST, prefix="contact", instance=self.object)
+        else:
+            objectives = ProjectObjectiveFormSet(prefix="obj", instance=self.object)
+            if self.object.projectobjective_set.all().count() < 1:
+                objectives.extra = 1
+            ctx["objectives"] = objectives
+            scopes = ProjectScopeFormSet(prefix="scope", instance=self.object)
+            if self.object.projectscope_set.all().count() < 1:
+                scopes.extra = 1
+            ctx["scopes"] = scopes
+            targets = ProjectTargetFormSet(prefix="target", instance=self.object)
+            if self.object.projecttarget_set.all().count() < 1:
+                targets.extra = 1
+            ctx["targets"] = targets
+            whitecards = WhiteCardFormSet(prefix="card", instance=self.object)
+            if self.object.whitecard_set.all().count() < 1:
+                whitecards.extra = 1
+            ctx["whitecards"] = whitecards
+            contacts = ProjectContactFormSet(prefix="contact", instance=self.object)
+            if self.object.projectcontact_set.all().count() < 1:
+                contacts.extra = 1
+            ctx["contacts"] = contacts
+        return ctx
+
+    def get_success_url(self):
+        messages.success(self.request, "Project components successfully saved.", extra_tags="alert-success")
+        return reverse("rolodex:project_detail", kwargs={"pk": self.object.pk})
+
+    def form_valid(self, form):
+        # Get form context data – used for validation of inline forms
+        ctx = self.get_context_data()
+        scopes = ctx["scopes"]
+        targets = ctx["targets"]
+        objectives = ctx["objectives"]
+        whitecards = ctx["whitecards"]
+        contacts = ctx["contacts"]
+
+        # Now validate inline formsets
+        # Validation is largely handled by the custom base formset, ``BaseProjectInlineFormSet``
+        try:
+            with transaction.atomic():
+                # Save the parent form – will rollback if a child fails validation
+                obj = form.save()
+
+                objectives_valid = objectives.is_valid()
+                if objectives_valid:
+                    objectives.instance = obj
+                    objectives.save()
+
+                scopes_valid = scopes.is_valid()
+                if scopes_valid:
+                    scopes.instance = obj
+                    scopes.save()
+
+                targets_valid = targets.is_valid()
+                if targets_valid:
+                    targets.instance = obj
+                    targets.save()
+
+                whitecards_valid = whitecards.is_valid()
+                if whitecards_valid:
+                    whitecards.instance = obj
+                    whitecards.save()
+
+                contacts_valid = contacts.is_valid()
+                if contacts_valid:
+                    contacts.instance = obj
+                    try:
+                        contacts.save()
+                    except IntegrityError:  # pragma: no cover
+                        form.add_error(None, "You cannot have duplicate contacts for a project.")
+
+                # Proceed with form submission
+                if (
+                    form.is_valid()
+                    and objectives_valid
+                    and scopes_valid
+                    and targets_valid
+                    and whitecards_valid
+                    and contacts_valid
+                ):
+                    obj.save()
+                    return super().form_valid(form)
+                # Raise an error to rollback transactions
+                raise forms.ValidationError(_("Invalid form data"))
+        # Otherwise return ``form_invalid`` and display errors
+        except Exception:
+            logger.exception("Failed to update the project.")
+            return super().form_invalid(form)
+
+
+class ProjectNoteCreate(RoleBasedAccessControlMixin, CreateView):
     """
     Create an individual :model:`rolodex.ProjectNote`.
 
@@ -1509,39 +2194,42 @@ class ProjectNoteCreate(LoginRequiredMixin, CreateView):
     form_class = ProjectNoteForm
     template_name = "note_form.html"
 
+    def test_func(self):
+        self.project_instance = get_object_or_404(Project, pk=self.kwargs.get("pk"))
+        return self.project_instance.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
     def get_success_url(self):
         messages.success(
             self.request,
             "Note successfully added to this project.",
             extra_tags="alert-success",
         )
-        return "{}#notes".format(
-            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.id})
-        )
+        return "{}#notes".format(reverse("rolodex:project_detail", kwargs={"pk": self.object.project.id}))
 
     def get_initial(self):
-        project_instance = get_object_or_404(Project, pk=self.kwargs.get("pk"))
-        project = project_instance
-        return {"project": project, "operator": self.request.user}
+        return {"project": self.project_instance, "operator": self.request.user}
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        project_instance = get_object_or_404(Project, pk=self.kwargs.get("pk"))
-        ctx["note_object"] = project_instance
+        ctx["note_object"] = self.project_instance
         ctx["cancel_link"] = "{}#notes".format(
-            reverse("rolodex:project_detail", kwargs={"pk": project_instance.id})
+            reverse("rolodex:project_detail", kwargs={"pk": self.project_instance.id})
         )
         return ctx
 
     def form_valid(self, form, **kwargs):
-        self.object = form.save(commit=False)
-        self.object.operator = self.request.user
-        self.object.project_id = self.kwargs.get("pk")
-        self.object.save()
+        obj = form.save(commit=False)
+        obj.operator = self.request.user
+        obj.project_id = self.kwargs.get("pk")
+        obj.save()
         return super().form_valid(form)
 
 
-class ProjectNoteUpdate(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
+class ProjectNoteUpdate(RoleBasedAccessControlMixin, UpdateView):
     """
     Update an individual :model:`rolodex.ProjectNote`.
 
@@ -1562,25 +2250,207 @@ class ProjectNoteUpdate(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     template_name = "note_form.html"
 
     def test_func(self):
-        self.object = self.get_object()
-        return self.object.operator.id == self.request.user.id
+        obj = self.get_object()
+        return obj.operator.id == self.request.user.id or verify_user_is_privileged(self.request.user)
 
     def handle_no_permission(self):
-        messages.error(self.request, "You do not have permission to access that")
-        return redirect("home:dashboard")
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect(reverse("rolodex:project_detail", kwargs={"pk": self.get_object().project.pk}) + "#notes")
 
     def get_success_url(self):
-        messages.success(
-            self.request, "Note successfully updated.", extra_tags="alert-success"
-        )
-        return "{}#notes".format(
-            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.id})
-        )
+        messages.success(self.request, "Note successfully updated.", extra_tags="alert-success")
+        return "{}#notes".format(reverse("rolodex:project_detail", kwargs={"pk": self.object.project.id}))
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["note_object"] = self.object.project
-        ctx["cancel_link"] = "{}#notes".format(
+        ctx["cancel_link"] = "{}#notes".format(reverse("rolodex:project_detail", kwargs={"pk": self.object.project.id}))
+        return ctx
+
+
+class DeconflictionCreate(RoleBasedAccessControlMixin, CreateView):
+    """
+    Create an individual :model:`rolodex.Deconfliction`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to project detail page
+
+    **Template**
+
+    :template:`rolodex/deconfliction_form.html`
+    """
+
+    model = Deconfliction
+    form_class = DeconflictionForm
+    template_name = "rolodex/deconfliction_form.html"
+
+    def test_func(self):
+        self.project_instance = get_object_or_404(Project, pk=self.kwargs.get("pk"))
+        return self.project_instance.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
+    def get_success_url(self):
+        messages.success(
+            self.request,
+            "Deconfliction successfully saved.",
+            extra_tags="alert-success",
+        )
+        return "{}#deconflictions".format(reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk}))
+
+    def get_initial(self):
+        return {
+            "status": 1,
+        }
+
+    def form_valid(self, form, **kwargs):
+        obj = form.save(commit=False)
+        obj.project_id = self.kwargs.get("pk")
+        obj.save()
+        return super().form_valid(form)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["project"] = self.project_instance
+        ctx["cancel_link"] = "{}#deconflictions".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.project_instance.id})
+        )
+        return ctx
+
+
+class DeconflictionUpdate(RoleBasedAccessControlMixin, UpdateView):
+    """
+    Update an individual :model:`rolodex.Deconfliction`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to Deconfliction detail page
+
+    **Template**
+
+    :template:`rolodex/deconfliction_form.html`
+    """
+
+    model = Deconfliction
+    form_class = DeconflictionForm
+    template_name = "rolodex/deconfliction_form.html"
+
+    def test_func(self):
+        return self.get_object().project.user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("home:dashboard")
+
+    def get_success_url(self):
+        messages.success(
+            self.request,
+            "Deconfliction successfully saved.",
+            extra_tags="alert-success",
+        )
+        return "{}#deconflictions".format(reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk}))
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["cancel_link"] = "{}#deconflictions".format(
             reverse("rolodex:project_detail", kwargs={"pk": self.object.project.id})
         )
         return ctx
+
+
+class BloodhoundApiBaseView(RoleBasedAccessControlMixin, View):
+    project: Project | None
+    bh_api: Project | BloodHoundConfiguration | None
+
+    def dispatch(self, request: HttpRequest, *args, **kwargs):
+        self.global_bh_api = BloodHoundConfiguration.get_solo()
+        if "project" in request.GET:
+            try:
+                project_id = int(request.GET["project"])
+            except ValueError:
+                return self.render_result(messages.constants.ERROR, "Project does not exist.")
+            self.project = get_object_or_404(Project, pk=project_id)
+            if self.project.has_bloodhound_api():
+                self.bh_api = self.project
+            elif self.global_bh_api.allows_project_fallback():
+                self.bh_api = self.global_bh_api
+            else:
+                self.bh_api = None
+        else:
+            self.project = None
+            self.bh_api = self.global_bh_api
+        return super().dispatch(request, *args, **kwargs)
+
+    def test_func(self):
+        if self.project is not None:
+            if self.project.has_bloodhound_api():
+                return self.project.user_can_view(self.request.user)
+            return self.project.user_can_view(self.request.user) and self.global_bh_api.allows_project_fallback()
+        return verify_user_is_privileged(self.request.user)
+
+    def post(self, request: HttpRequest, *args, **kwargs):
+        if self.bh_api is None or not self.bh_api.has_bloodhound_api():
+            return self.render_result(messages.constants.ERROR, "BloodHound is not configured.")
+        bh_url = urlparse(self.bh_api.bloodhound_api_root_url)
+        bh_client = BhAPIClient(
+            scheme=bh_url.scheme,
+            host=bh_url.hostname,
+            port=bh_url.port,
+            credentials=BhCredentials(
+                token_id=self.bh_api.bloodhound_api_key_id,
+                token_key=self.bh_api.bloodhound_api_key_token,
+            ),
+        )
+        return self.run(bh_client)
+
+    def run(self, bh_client: BhAPIClient):
+        raise NotImplementedError("Override run")
+
+    def render_result(self, level: int, message: str) -> HttpResponse:
+        if "X-GW-Async" in self.request.headers:
+            if level == messages.SUCCESS:
+                return HttpResponse(status=200, content=message)
+            return HttpResponse(status=401, content=message)
+        messages.add_message(self.request, level, message, extra_tags="error" if level == messages.ERROR else "")
+        if self.project is not None:
+            url = self.project.get_absolute_url() + "#bloodhound"
+        else:
+            url = reverse("admin:commandcenter_bloodhoundconfiguration_change")
+        return HttpResponseRedirect(url)
+
+
+class BloodhoundApiTestView(BloodhoundApiBaseView):
+    def run(self, bh_client: BhAPIClient):
+        try:
+            bh_version = bh_client.get_version()
+        except (IOError, json.JSONDecodeError, KeyError, BhAPIException):
+            logger.exception("BH connection test failed")
+            return self.render_result(messages.ERROR, "Could not connect to BloodHound")
+        logger.info(f"BloodHound instance version: {bh_version.server_version}, API version {bh_version.current_api_version}, edition: {bh_version.edition}")
+
+        message = "Connected to BloodHound successfully — BloodHound version " + bh_version.server_version + "."
+        if bh_version.edition is not None:
+            message += " " + bh_version.edition.title() + " Edition"
+        return self.render_result(messages.SUCCESS, message)
+
+
+class BloodhoundApiFetchView(BloodhoundApiBaseView):
+    def run(self, bh_client: BhAPIClient):
+        try:
+            bh_version = bh_client.get_version()
+            logger.info(f"BloodHound instance version: {bh_version.server_version}, API version {bh_version.current_api_version}, edition: {bh_version.edition}")
+
+            out = bh_client.get_all()
+        except (IOError, json.JSONDecodeError, KeyError, BhAPIException):
+            logger.exception("BH connection test failed")
+            return self.render_result(messages.ERROR, "Could not connect to BloodHound.")
+
+        self.bh_api.bloodhound_results = out
+        self.bh_api.save()
+
+        return self.render_result(messages.SUCCESS, out.get("status_message", "Findings updated from BloodHound successfully."))

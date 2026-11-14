@@ -1,0 +1,229 @@
+---
+title: "Authentication"
+description: "Explanation of Ghostwriter's authentication tokens"
+---
+
+## Introduction
+
+User login is handled with JSON Web Tokens (JWT). User-managed API tokens and service tokens are opaque database-backed credentials:
+
+* Submit credentials to the `login` action and receive a short-lived JWT that can interact with Ghostwriter as the authenticated user
+
+* Create an API token from your profile and receive an opaque `gwat_` token for user-bound automation
+
+* Create a service token from your profile and receive an opaque `gwst_` token for scoped non-human automation
+
+The JWT secret key is defined in the environment variables, `DJANGO_JWT_SECRET_KEY`. If you plug a Ghostwriter JWT into a
+debugger like the one at [https://jwt.io/](https://jwt.io/), you will see something similar to the following:
+
+<CodeGroup>
+  ```bash HEADER
+  {
+    "alg": "HS256",
+    "typ": "ghostwriter-user+jwt"
+  }
+  ```
+</CodeGroup>
+
+<CodeGroup>
+  ```bash PAYLOAD
+  {
+    "sub": "1",
+    "sub_name": "benny",
+    "sub_email": "benny@getghostwriter.io",
+    "aud": "Ghostwriter",
+    "iat": 1646088460,
+    "exp": 1646117260,
+    "jti": "4a838a9a-5f7c-43a0-b16d-1099fc951d54"
+  }
+  ```
+</CodeGroup>
+
+<CodeGroup>
+  ```bash SIGNATURE
+  SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+  ```
+</CodeGroup>
+
+The tokens follow the JWT open standard ([RFC7519](https://datatracker.ietf.org/doc/html/rfc7519)).
+
+### User Tokens
+
+User JWTs are generated with the `login` action. The resulting JWT holds the same privileges as the authenticated user.
+User JWTs are valid for 15 minutes and include a tracked session identifier so administrators can revoke active sessions.
+
+<Info>
+The collaborative editor uses JWTs with the `ghostwriter-collab+jwt` type. Hasura accepts these tokens only as the
+restricted `collab` role for the editor's required read-only GraphQL queries. General GraphQL Actions reject them except
+for the collaborative editor permission-check endpoint. Collab JWTs include scope claims for the editor model, object,
+report, and finding. The webhook exposes these claims as Hasura session variables so the `collab` role can read only the
+evidence rows needed by that editor page. Missing numeric IDs are represented as `-1`. Collab JWTs are not tracked in
+`UserSession`; that table is only for JWTs returned by the `login` action.
+</Info>
+
+```json
+mutation Login {
+  login(password: "password", username: "username") {
+    token
+    expires
+  }
+}
+```
+
+<Note>
+The `Login` action is disabled for accounts with MFA configured. An account with MFA should use a generated API token (see below).
+</Note>
+
+### API Tokens
+
+You can also generate API tokens by visiting your profile page and using the **API Tokens** card. In this section, you
+can create new tokens, see all existing tokens, edit expiry dates, regenerate tokens, hide expired tokens, and revoke
+tokens you no longer need.
+
+API tokens are opaque tokens with a `gwat_` prefix. They are not JWTs and do not contain a readable payload. Ghostwriter
+stores a hash of the token secret and validates the database record on each request so tokens can be revoked immediately.
+Ghostwriter records a last-used timestamp for accepted API tokens, with throttling to avoid updating the database on every
+request.
+
+API tokens have user-defined expiration dates. They are intended for automation tasks that should inherit the current
+permissions of the user who created the token.
+
+General Settings control token lifecycle policy for both user tokens and service tokens. New tokens and expiry edits cannot
+exceed the configured maximum lifetime, which defaults to 365 days. Existing tokens that already exceed a lowered maximum
+are not shortened automatically, but they cannot be extended beyond the active policy.
+
+Shortening expiry updates the same credential in place. Extending expiry rotates the credential but administrators can disable
+forced rotation for expiry extensions. Regenerating or revoking a token invalidates the previous credential immediately. Expired
+tokens must have expiry extended before regeneration. If administrators do not require rotation for expiry extensions, regenerate
+the token after extending expiry to rotate the credential.
+
+<CodeGroup>
+```plaintext Example Token
+gwat_a0f02f188578a48b_ERJdqkkqz8U3Ny9cItiHT-1k62Ed4fNPPJ2LbjAVWH4
+```
+</CodeGroup>
+
+### Service Tokens
+
+Service tokens are created from the **Service Tokens** card on the user profile page. Service tokens are scoped credentials
+for non-human service principals. They do not inherit the permissions of the user who created them.
+
+Use service tokens when automation should have a fixed, limited permission set, such as:
+
+* Read/write access to one operation log and its entries
+* Read-only access to project data
+
+Service tokens share one Hasura `service` role. Hasura exposes queries, mutations, and Actions at the role level, so a
+service token might see GraphQL fields that are intended for another service-token preset. Token-specific permissions are
+still enforced by Hasura row filters and Django Action authorization. For example, an operation-log read/write token can
+see project-read Actions in the schema, but those Actions return an authorization error unless that specific token has the
+required project-read grant.
+
+These tokens are not JWTs. They are opaque tokens with a `gwst_` prefix for easy identification. Opaque tokens do not include
+a payload that describes a user or permission set. Rather, they are backed by a database entry that controls their permission
+set. Service tokens follow the same maximum lifetime, expiry-edit, regeneration, and revocation policy as API tokens.
+
+<CodeGroup>
+```plaintext Example Token
+gwst_32fabb637697aad2_OPWZ2iI9fkPYdbtkHOxBucdPfVG0NDaWDmMu5icCkLM
+```
+</CodeGroup>
+
+<CardGroup cols={1}> <Card title="User Profile and Tokens" icon="user-gear" iconType="solid" href="/features/access-authentication-and-session-controls/user-profile-and-tokens" /> </CardGroup>
+
+## Token Authentication
+
+Requests authenticate with the `Authorization` header: `Authorization: Bearer TOKEN`
+
+Hasura connects to an authentication webhook before a request. The webhook accepts three credential families:
+
+* login JWTs returned by the `login` action
+* opaque user API tokens with the `gwat_` prefix
+* opaque service tokens with the `gwst_` prefix
+
+For login JWTs, the webhook takes several steps to examine the JWT before allowing a request to proceed:
+
+1. Check the JWT is present
+
+2. Attempt to decode the JWT and verify the signature, audience, and expiration
+
+3. Verify the JWT type and required claims
+
+4. Verify the tracked session exists, has not expired, has not been revoked, and belongs to the JWT subject
+
+5. Finally, verify the user details are correct and that the account is still active
+
+If the token passes the above checks and your user's role is authorized (see [Authorization](/features/access-authentication-and-session-controls/role-based-access-controls)) to perform the query or mutation, you will receive a `200 OK` response with your requested data.
+
+For collaborative editor JWTs, the webhook verifies the JWT signature, audience, expiration, `ghostwriter-collab+jwt`
+type, and active user. It then returns the restricted `collab` role with the token's collab-scope session variables.
+The collaborative editor permission-check endpoint also requires the requested model and object ID to match the token's
+collab scope.
+
+For API tokens, the webhook validates the opaque token prefix and secret, checks the API token database record, and then
+authenticates the request as the token's user. Accepted API tokens update their last-used timestamp when it is missing or
+stale.
+
+For service tokens, the webhook validates the opaque token, verifies the service principal is active, and returns
+service-scoped session variables to Hasura. Service tokens do not become users and do not receive the permissions of
+the user who created them. The shared `service` role controls which schema fields are visible, while each token's
+`ServiceTokenPermission` rows control which protected rows and Django-backed Actions the token can use.
+
+If a request does not include an `Authorization` header, the webhook returns the `public` role with the username
+`anonymous`. This is not a real user or role and is only used to manage access to resources designed to be accessed
+without authentication. The only action available for this `anonymous` role is the `Login` action.
+
+If a request includes an invalid, expired, revoked, or otherwise unacceptable token, the authorization webhook will return
+a `401 Unauthorized` response with an error like this:
+
+```json
+{
+  "errors": [
+    {
+      "extensions": {
+        "path": "$",
+        "code": "access-denied"
+      },
+      "message": "Authentication hook unauthorized this request"
+    }
+  ]
+}
+```
+
+### Authentication & Authorization Flow
+
+This is a MermaidJS diagram showing the general flow for authentication and authorization:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    User->>GraphQL: Login Mutation
+    loop Authentication
+        GraphQL->>Webhook: Username & Password
+        Webhook->>Back End: Who is this user?
+        Back End->>Webhook: 'User' Object
+        Webhook->>Back End: Create UserSession
+        Webhook->>Webhook: Generate typed login JWT
+        Webhook->>GraphQL: Login JWT
+    end
+    GraphQL->>User: Authentication Error || Pass login JWT to User
+    User->>GraphQL: GraphQL Request with login JWT, gwat_ API token, or gwst_ service token
+    loop Authorization
+        GraphQL->>Webhook: Authorization Header
+        alt Login JWT
+            Webhook->>Webhook: Verify signature, audience, type, and exp
+            Webhook->>Back End: Validate UserSession jti and active user
+            Back End->>Webhook: User role session variables
+        else API token
+            Webhook->>Back End: Validate opaque gwat_ token record
+            Back End->>Webhook: User role session variables
+        else Service token
+            Webhook->>Back End: Validate opaque gwst_ token, principal, and scope
+            Back End->>Webhook: Service role session variables
+        end
+        Webhook->>GraphQL: Authentication Result
+    end
+    Note right of GraphQL: Check 'Authorization' header
+    GraphQL->>User: Authorization Error || GraphQL Result
+```

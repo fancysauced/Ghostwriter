@@ -1,0 +1,26 @@
+{% load bleach_tags %}
+
+<div id="vps_detail_{{ vps.id }}" class="modal fade detail-preview-modal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-super-sized modal-dialog-scrollable modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <span class="detail-preview-modal-eyebrow">Cloud server</span>
+          <h2 class="modal-title">{{ vps }}</h2>
+        </div>
+        <button type="button" class="btn-close detail-preview-modal-close" data-bs-dismiss="modal" aria-label="Close">
+        </button>
+      </div>
+      <div class="modal-body">
+        {% if vps.description %}
+          {{ vps.description|bleach|safe }}
+        {% else %}
+          <p>No one has added a description on this cloud host. <a class="clickable" href="{% url 'shepherd:vps_update' vps.id %}">Fix that here.</a></p>
+        {% endif %}
+      </div>
+      <div class="modal-footer detail-preview-modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

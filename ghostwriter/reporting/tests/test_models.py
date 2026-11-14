@@ -1,31 +1,48 @@
 # Standard Libraries
+from datetime import timedelta
 import logging
 import os
-
-# Django Imports
-from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import transaction
-from django.test import TestCase
+import json
 
 # 3rd Party Libraries
 import factory
 
+# Django Imports
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import transaction
+from django.test import TestCase, Client
+from django.urls import reverse
+from django.utils import timezone
+
 # Ghostwriter Libraries
+from ghostwriter.modules.reportwriter.report.docx import ExportReportDocx
+from ghostwriter.commandcenter.models import ReportConfiguration
+from ghostwriter.reporting.archive import archive_report
 from ghostwriter.factories import (
     ArchiveFactory,
+    ClientFactory,
+    ClientInviteFactory,
     DocTypeFactory,
     EvidenceFactory,
     FindingFactory,
     FindingNoteFactory,
     FindingTypeFactory,
     LocalFindingNoteFactory,
+    ProjectAssignmentFactory,
+    ProjectFactory,
     ReportDocxTemplateFactory,
     ReportFactory,
     ReportFindingLinkFactory,
     ReportPptxTemplateFactory,
     ReportTemplateFactory,
     SeverityFactory,
+    UserFactory,
+    ReportObservationLinkFactory,
 )
+from ghostwriter.modules.reportwriter.report.json import ExportReportJson
+from ghostwriter.reporting.models import EvidenceImageAlignment, EvidenceImageAlignmentOverride, Report
+from ghostwriter.rolodex.models import Project
+
 
 logging.disable(logging.CRITICAL)
 
@@ -44,18 +61,10 @@ class FindingModelTests(TestCase):
         # Read
         self.assertEqual(finding.title, "Awful Finding")
         self.assertEqual(finding.pk, finding.id)
-        self.assertQuerysetEqual(
-            self.Finding.objects.all(),
-            [f"<Finding: [{finding.severity}] {finding.title}>"],
-        )
 
         # Update
         finding.title = "Not so Bad Finding"
         finding.save()
-        self.assertQuerysetEqual(
-            self.Finding.objects.all(),
-            [f"<Finding: [{finding.severity}] {finding.title}>"],
-        )
 
         # Delete
         finding.delete()
@@ -65,7 +74,7 @@ class FindingModelTests(TestCase):
         finding = FindingFactory()
         try:
             finding.get_absolute_url()
-        except:
+        except Exception:
             self.fail("Finding.get_absolute_url() raised an exception")
 
 
@@ -78,13 +87,13 @@ class SeverityModelTests(TestCase):
 
     def test_crud_severity(self):
         # Create
-        severity = SeverityFactory(severity="High", weight=2, color="FFFFFF")
+        severity = SeverityFactory(severity="High", weight=1, color="FFFFFF")
 
         # Read
         self.assertEqual(severity.severity, "High")
         self.assertEqual(severity.pk, severity.id)
         self.assertEqual(severity.color, "FFFFFF")
-        self.assertEqual(severity.weight, 2)
+        self.assertEqual(severity.weight, 1)
         self.assertEqual(len(self.Severity.objects.all()), 1)
         self.assertEqual(self.Severity.objects.first(), severity)
 
@@ -123,6 +132,46 @@ class SeverityModelTests(TestCase):
             self.assertEqual(1, count)
         except Exception:
             self.fail("Severity model `count` property failed unexpectedly!")
+
+    def test_adjust_severity_weight_signals(self):
+        self.Severity.objects.all().delete()
+        self.assertEqual(self.Severity.objects.all().count(), 0)
+
+        critical = SeverityFactory(severity="Critical", weight=2, color="FFFFFF")
+        high = SeverityFactory(severity="High", weight=2, color="FFF000")
+        medium = SeverityFactory(severity="Medium", weight=3, color="000FFF")
+
+        self.assertEqual(critical.severity, "Critical")
+        self.assertEqual(critical.color, "FFFFFF")
+        self.assertEqual(critical.weight, 1)
+        self.assertEqual(high.severity, "High")
+        self.assertEqual(high.color, "FFF000")
+        self.assertEqual(high.weight, 2)
+        self.assertEqual(medium.severity, "Medium")
+        self.assertEqual(medium.color, "000FFF")
+        self.assertEqual(medium.weight, 3)
+
+        low = SeverityFactory(severity="Low", weight=50, color="000FFF")
+        self.assertEqual(low.weight, 4)
+
+        info = SeverityFactory(severity="Info", weight=-1, color="000FFF")
+        self.assertEqual(info.weight, 5)
+
+        critical.weight = 2
+        critical.save()
+
+        critical.refresh_from_db()
+        high.refresh_from_db()
+
+        self.assertEqual(critical.weight, 2)
+        self.assertEqual(high.weight, 1)
+
+        critical.delete()
+        high.refresh_from_db()
+        medium.refresh_from_db()
+
+        self.assertEqual(high.weight, 1)
+        self.assertEqual(medium.weight, 2)
 
 
 class FindingTypeModelTests(TestCase):
@@ -170,7 +219,7 @@ class DocTypeModelTests(TestCase):
 
     def test_crud_doc_type(self):
         # Create
-        doc_type = DocTypeFactory(doc_type="docx")
+        doc_type = DocTypeFactory(doc_type="docx", extension="docx", name="docx")
 
         # Read
         self.assertEqual(doc_type.doc_type, "docx")
@@ -221,8 +270,55 @@ class ReportTemplateModelTests(TestCase):
         template = ReportTemplateFactory()
         try:
             template.get_absolute_url()
-        except:
+        except Exception:
             self.fail("ReportTemplate.get_absolute_url() raised an exception")
+
+    def test_global_template_authorization(self):
+        user = UserFactory()
+        template_manager = UserFactory(enable_template_management=True)
+        manager = UserFactory(role="manager")
+        template = ReportTemplateFactory(client=None, protected=False)
+
+        self.assertTrue(template.user_can_view(user))
+        self.assertFalse(template.user_can_edit(user))
+        self.assertFalse(template.user_can_delete(user))
+        self.assertTrue(template.user_can_edit(template_manager))
+        self.assertTrue(template.user_can_delete(template_manager))
+        self.assertTrue(template.user_can_edit(manager))
+        self.assertFalse(self.ReportTemplate.user_can_create(user, client=None))
+        self.assertTrue(
+            self.ReportTemplate.user_can_create(template_manager, client=None)
+        )
+        self.assertTrue(self.ReportTemplate.user_can_create(manager, client=None))
+
+    def test_client_template_authorization(self):
+        user = UserFactory()
+        template_manager = UserFactory(enable_template_management=True)
+        client = ClientFactory()
+        ClientInviteFactory(client=client, user=user)
+        ClientInviteFactory(client=client, user=template_manager)
+        template = ReportTemplateFactory(client=client, protected=False)
+
+        self.assertTrue(self.ReportTemplate.user_can_create(user, client=client))
+        self.assertTrue(template.user_can_edit(user))
+
+        template.protected = True
+        self.assertFalse(template.user_can_edit(user))
+        self.assertTrue(template.user_can_edit(template_manager))
+        self.assertTrue(template.user_can_delete(template_manager))
+
+    def test_template_manager_does_not_gain_unrelated_client_access(self):
+        template_manager = UserFactory(enable_template_management=True)
+        client = ClientFactory()
+        template = ReportTemplateFactory(client=client, protected=True)
+
+        self.assertFalse(client.user_can_view(template_manager))
+        self.assertFalse(template.user_can_view(template_manager))
+        self.assertFalse(template.user_can_edit(template_manager))
+        self.assertFalse(template.user_can_delete(template_manager))
+        self.assertFalse(
+            self.ReportTemplate.user_can_create(template_manager, client=client)
+        )
 
     def test_prop_filename(self):
         report_template = ReportTemplateFactory()
@@ -238,16 +334,138 @@ class ReportTemplateModelTests(TestCase):
             status = docx_report_template.get_status()
             self.assertEqual("success", status)
         except Exception:
-            self.fail(
-                "ReportTemplate model `get_status` method failed unexpectedly with DOCX template!"
-            )
+            self.fail("ReportTemplate model `get_status` method failed unexpectedly with DOCX template!")
         try:
             status = pptx_report_template.get_status()
             self.assertEqual("success", status)
         except Exception:
-            self.fail(
-                "ReportTemplate model `get_status` method failed unexpectedly with PPTX template!"
-            )
+            self.fail("ReportTemplate model `get_status` method failed unexpectedly with PPTX template!")
+
+    def test_exporter_uses_report_template_for_docx_exports(self):
+        report = ReportFactory()
+
+        exporter = report.docx_template.exporter(report)
+
+        self.assertIsInstance(exporter, ExportReportDocx)
+        self.assertEqual(exporter.report_template, report.docx_template)
+
+    def test_docx_lint_initializes_template_document_before_style_checks(self):
+        report_template = ReportDocxTemplateFactory()
+
+        _, errors = ExportReportDocx.lint(report_template)
+
+        self.assertNotIn("Template rendering failed unexpectedly", errors)
+
+    def test_update_upload_date_signal(self):
+        # Create a template with an initial document
+        template = ReportTemplateFactory()
+
+        # Set upload_date to a specific date in the past
+        past_date = (timezone.now() - timedelta(days=30)).date()
+        template.upload_date = past_date
+        template.save()
+        template.refresh_from_db()
+        self.assertEqual(template.upload_date, past_date)
+
+        # Update a field other than document
+        template.name = "Updated Name Only"
+        template.save()
+        template.refresh_from_db()
+
+        # Check that upload_date did not change
+        self.assertEqual(template.upload_date, past_date)
+
+        # Create a distinctly different document file
+        new_file = SimpleUploadedFile(
+            name="test_document_new.docx",
+            content=b"New document content",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+        # Update the document with the new file
+        template.document = new_file
+        template.save()
+        template.refresh_from_db()
+
+        # Check that upload_date has changed from our past date
+        self.assertNotEqual(template.upload_date, past_date)
+
+        # Also verify it's set to today's date
+        today = timezone.now().date()
+        self.assertEqual(template.upload_date, today)
+
+    def test_get_effective_evidence_image_alignment_uses_global_default(self):
+        template = ReportTemplateFactory(
+            evidence_image_alignment=EvidenceImageAlignmentOverride.USE_GLOBAL,
+        )
+        report_config = ReportConfiguration.get_solo()
+        report_config.evidence_image_alignment = EvidenceImageAlignment.RIGHT
+
+        alignment = template.get_effective_evidence_image_alignment(report_config)
+
+        self.assertEqual(alignment, EvidenceImageAlignment.RIGHT)
+
+    def test_get_effective_evidence_image_alignment_uses_template_override(self):
+        template = ReportTemplateFactory(
+            evidence_image_alignment=EvidenceImageAlignmentOverride.LEFT,
+        )
+        report_config = ReportConfiguration.get_solo()
+        report_config.evidence_image_alignment = EvidenceImageAlignment.RIGHT
+
+        alignment = template.get_effective_evidence_image_alignment(report_config)
+
+        self.assertEqual(alignment, EvidenceImageAlignment.LEFT)
+
+    def test_get_effective_evidence_image_alignment_accepts_case_variant_template_value(self):
+        report_config = ReportConfiguration.get_solo()
+        report_config.evidence_image_alignment = EvidenceImageAlignment.RIGHT
+
+        for alignment_value in ("CENTER", "Center", "center"):
+            with self.subTest(alignment_value=alignment_value):
+                template = ReportTemplateFactory(evidence_image_alignment=alignment_value)
+                alignment = template.get_effective_evidence_image_alignment(report_config)
+
+                self.assertEqual(alignment, EvidenceImageAlignment.CENTER)
+
+    def test_get_effective_evidence_image_alignment_accepts_case_variant_global_value(self):
+        template = ReportTemplateFactory(
+            evidence_image_alignment=EvidenceImageAlignmentOverride.USE_GLOBAL,
+        )
+        report_config = ReportConfiguration.get_solo()
+
+        for alignment_value in ("RIGHT", "Right", "right"):
+            with self.subTest(alignment_value=alignment_value):
+                report_config.evidence_image_alignment = alignment_value
+                alignment = template.get_effective_evidence_image_alignment(report_config)
+
+                self.assertEqual(alignment, EvidenceImageAlignment.RIGHT)
+
+    def test_get_effective_evidence_image_width_uses_template_override(self):
+        template = ReportTemplateFactory(evidence_image_width=4.25)
+        report_config = ReportConfiguration.get_solo()
+        report_config.evidence_image_width = 7.0
+
+        width = template.get_effective_evidence_image_width(report_config)
+
+        self.assertEqual(width, 4.25)
+
+    def test_get_effective_evidence_image_width_uses_global_default(self):
+        template = ReportTemplateFactory(evidence_image_width=None)
+        report_config = ReportConfiguration.get_solo()
+        report_config.evidence_image_width = 7.0
+
+        width = template.get_effective_evidence_image_width(report_config)
+
+        self.assertEqual(width, 7.0)
+
+    def test_get_effective_evidence_image_width_falls_back_to_default(self):
+        template = ReportTemplateFactory(evidence_image_width=None)
+        report_config = ReportConfiguration.get_solo()
+        report_config.evidence_image_width = None
+
+        width = template.get_effective_evidence_image_width(report_config)
+
+        self.assertEqual(width, 6.5)
 
     def test_clean_template_signal(self):
         template = ReportDocxTemplateFactory()
@@ -257,7 +475,7 @@ class ReportTemplateModelTests(TestCase):
 
         template.save()
 
-        self.assertTrue(template._current_template.path not in template.document.path)
+        self.assertNotIn(template._current_template.path, template.document.path)
         self.assertFalse(os.path.exists(template._current_template.path))
         self.assertTrue(os.path.exists(template.document.path))
 
@@ -298,8 +516,196 @@ class ReportModelTests(TestCase):
         report = ReportFactory()
         try:
             report.get_absolute_url()
-        except:
+        except Exception:
             self.fail("Report.get_absolute_url() raised an exception")
+
+    def test_clear_incorrect_template_defaults_unchanged(self):
+        docx_template = ReportDocxTemplateFactory()
+        pptx_template = ReportPptxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            docx_template=docx_template,
+            pptx_template=pptx_template,
+        )
+
+        # Don't change anything. Clearing should do nothing.
+
+        self.Report.clear_incorrect_template_defaults(docx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.id, report.id)
+        self.assertIsNotNone(new_report.docx_template)
+        self.assertEqual(new_report.docx_template.id, docx_template.id)
+        self.assertIsNotNone(new_report.pptx_template)
+        self.assertEqual(new_report.pptx_template.id, pptx_template.id)
+
+        self.Report.clear_incorrect_template_defaults(pptx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.id, report.id)
+        self.assertIsNotNone(new_report.docx_template)
+        self.assertEqual(new_report.docx_template.id, docx_template.id)
+        self.assertIsNotNone(new_report.pptx_template)
+        self.assertEqual(new_report.pptx_template.id, pptx_template.id)
+
+    def test_clear_incorrect_template_defaults_docx_to_pptx(self):
+        docx_template = ReportDocxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            docx_template=docx_template,
+        )
+
+        docx_template.doc_type = DocTypeFactory(doc_type="pptx", extension="pptx", name="pptx")
+        docx_template.save()
+
+        self.Report.clear_incorrect_template_defaults(docx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.id, report.id)
+        self.assertIsNone(new_report.docx_template)
+
+    def test_clear_incorrect_template_defaults_pptx_to_docx(self):
+        pptx_template = ReportPptxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            pptx_template=pptx_template,
+        )
+
+        pptx_template.doc_type = DocTypeFactory(doc_type="docx", extension="docx", name="docx")
+        pptx_template.save()
+
+        self.Report.clear_incorrect_template_defaults(pptx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.id, report.id)
+        self.assertIsNone(new_report.pptx_template)
+
+    def test_clear_incorrect_template_defaults_client_change_clear(self):
+        client = ClientFactory()
+        pptx_template = ReportDocxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            pptx_template=pptx_template,
+        )
+
+        pptx_template.client = client
+        pptx_template.save()
+
+        self.Report.clear_incorrect_template_defaults(pptx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.id, report.id)
+        self.assertIsNone(new_report.pptx_template)
+
+    def test_clear_incorrect_template_defaults_client_change_set_same(self):
+        client = ClientFactory()
+        project = ProjectFactory(client=client)
+        pptx_template = ReportPptxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            pptx_template=pptx_template,
+            project=project,
+        )
+
+        self.assertEqual(report.project.client, client)
+
+        pptx_template.client = client
+        pptx_template.save()
+
+        self.Report.clear_incorrect_template_defaults(pptx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.project.client, client)
+        self.assertIsNotNone(new_report.pptx_template)
+        self.assertEqual(new_report.pptx_template.id, pptx_template.id)
+
+    def test_clear_incorrect_template_defaults_client_change_set_different(self):
+        client = ClientFactory()
+        project = ProjectFactory(client=client)
+        pptx_template = ReportPptxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            pptx_template=pptx_template,
+            project=project,
+        )
+
+        self.assertEqual(report.project.client, client)
+
+        pptx_template.client = ClientFactory()
+        pptx_template.save()
+
+        self.Report.clear_incorrect_template_defaults(pptx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.project.client, client)
+        self.assertIsNone(new_report.pptx_template)
+
+    def test_archive_rejects_client_scoped_template_for_other_client(self):
+        report = ReportFactory()
+        report.docx_template = ReportDocxTemplateFactory(client=ClientFactory())
+        report.save()
+
+        with self.assertRaises(ValueError):
+            archive_report(report)
+
+    def test_archive_rejects_template_for_wrong_document_type(self):
+        report = ReportFactory()
+        report.docx_template = ReportPptxTemplateFactory()
+        report.save()
+
+        with self.assertRaises(ValueError):
+            archive_report(report)
+
+    def test_access(self):
+        project: Project = ProjectFactory()
+        report: Report = ReportFactory(
+            title="New report",
+            project=project,
+        )
+        user = UserFactory(password="SuperNaturalReporting!")
+
+        self.assertFalse(Report.user_can_create(user, project))
+        self.assertFalse(report.user_can_view(user))
+        self.assertFalse(report.user_can_edit(user))
+        self.assertFalse(report.user_can_delete(user))
+        self.assertEquals(list(Report.user_viewable(user)), [])
+
+        user.role = "manager"
+        user.save()
+        self.assertTrue(Report.user_can_create(user, project))
+        self.assertTrue(report.user_can_view(user))
+        self.assertTrue(report.user_can_edit(user))
+        self.assertTrue(report.user_can_delete(user))
+        self.assertEquals(list(Report.user_viewable(user)), [report])
+
+        user.role = "user"
+        user.save()
+        self.assertFalse(Report.user_can_create(user, project))
+        self.assertFalse(report.user_can_view(user))
+        self.assertFalse(report.user_can_edit(user))
+        self.assertFalse(report.user_can_delete(user))
+        self.assertEquals(list(Report.user_viewable(user)), [])
+
+        assignment = ProjectAssignmentFactory(operator=user, project=project)
+        self.assertTrue(Report.user_can_create(user, project))
+        self.assertTrue(report.user_can_view(user))
+        self.assertTrue(report.user_can_edit(user))
+        self.assertTrue(report.user_can_delete(user))
+        self.assertEquals(list(Report.user_viewable(user)), [report])
+
+        assignment.delete()
+        self.assertFalse(Report.user_can_create(user, project))
+        self.assertFalse(report.user_can_view(user))
+        self.assertFalse(report.user_can_edit(user))
+        self.assertFalse(report.user_can_delete(user))
+        self.assertEquals(list(Report.user_viewable(user)), [])
+
+        client_invite = ClientInviteFactory(user=user, client=project.client)
+        self.assertTrue(Report.user_can_create(user, project))
+        self.assertTrue(report.user_can_view(user))
+        self.assertTrue(report.user_can_edit(user))
+        self.assertTrue(report.user_can_delete(user))
+        self.assertEquals(list(Report.user_viewable(user)), [report])
+
+        client_invite.delete()
+        self.assertFalse(Report.user_can_create(user, project))
+        self.assertFalse(report.user_can_view(user))
+        self.assertFalse(report.user_can_edit(user))
+        self.assertFalse(report.user_can_delete(user))
+        self.assertEquals(list(Report.user_viewable(user)), [])
 
 
 class ReportFindingLinkModelTests(TestCase):
@@ -308,8 +714,9 @@ class ReportFindingLinkModelTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.ReportFindingLink = ReportFindingLinkFactory._meta.model
-        cls.critical_severity = SeverityFactory(severity="Critical", weight=0)
-        cls.high_severity = SeverityFactory(severity="High", weight=1)
+        cls.critical_severity = SeverityFactory(severity="Critical", weight=0, color="966FD6")
+        cls.high_severity = SeverityFactory(severity="High", weight=1, color="FF7E79")
+        cls.medium_severity = SeverityFactory(severity="Medium", weight=2, color="F4B083")
 
     def tearDown(self):
         # Need to use atomic because ``TestCase`` and a ``post_delete`` Signal`
@@ -335,170 +742,45 @@ class ReportFindingLinkModelTests(TestCase):
         finding.delete()
         assert not self.ReportFindingLink.objects.all().exists()
 
-    def test_model_cleaning_position(self):
-        report = ReportFactory()
-        num_of_findings = 10
-        findings = []
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.critical_severity)
-            )
-        # New position values
-        first_pos = 1
-        second_pos = 2
-        # Bump first finding from ``1`` to new value
-        findings[0].position = second_pos
-        findings[0].save()
+    def test_cvss_scores_property(self):
+        # CVSS v3.1 – 8.0 High, 7.6 High, 5.4 Medium
+        three_vector = (
+            "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:C/C:H/I:H/A:H/E:P/RL:U/RC:C/CR:L/IR:L/AR:L/MAV:P/MAC:L/MPR:L/MUI:N/MS:C"
+        )
+        # CVSS v4.1 – 9.1 Critical
+        four_vector = "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:H/SC:L/SI:H/SA:L/E:A/CR:H/IR:H/AR:L/MAV:N/MAC:H/MAT:N/MPR:N/MUI:N/MVI:L/MVA:H/MSC:H/MSI:H/MSA:N/R:I/V:C/RE:M/U:Red"
 
-        cleaned_findings = []
-        for f in findings:
-            f.refresh_from_db()
-            cleaned_findings.append(f)
-        # Assert first finding is now in second position
-        self.assertEqual(cleaned_findings[0].position, second_pos)
-        # Assert second finding has moved into first positon
-        self.assertEqual(cleaned_findings[1].position, first_pos)
+        critical_finding = ReportFindingLinkFactory(severity=self.critical_severity, cvss_vector=four_vector)
+        medium_finding = ReportFindingLinkFactory(severity=self.medium_severity, cvss_vector=three_vector)
+        unknown_finding = ReportFindingLinkFactory(severity=self.high_severity, cvss_vector="Not a Vector")
+        invalid_v4_finding = ReportFindingLinkFactory(
+            severity=self.high_severity,
+            cvss_vector="CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:S/SI:S/SA:S/S:P",
+        )
+        incomplete_v4_finding = ReportFindingLinkFactory(
+            severity=self.high_severity,
+            cvss_vector="CVSS:4.0/AV:N",
+        )
 
-        # Test triggering ``clean()`` method when parent ``Report`` is deleted
-        report.delete()
+        critical_data = ("4.0", 9.1, "Critical", "966FD6")
+        medium_data = ("3.1", (8.0, 7.6, 5.4), ("High", "High", "Medium"), ["FF7E79", "FF7E79", "F4B083"])
+        unknown_data = ("Unknown", "", "", "")
 
-    def test_model_cleaning_severity_change(self):
-        report = ReportFactory()
-        num_of_findings = 10
-        findings = []
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.critical_severity)
-            )
-        # Bump the first half of the findings to the new severity in reverse order
-        for f in reversed(range(5)):
-            findings[f].severity = self.high_severity
-            findings[f].save()
+        self.assertEqual(critical_finding.cvss_data, critical_data)
+        self.assertEqual(medium_finding.cvss_data, medium_data)
+        self.assertEqual(unknown_finding.cvss_data, unknown_data)
+        self.assertEqual(invalid_v4_finding.cvss_data, unknown_data)
+        self.assertEqual(incomplete_v4_finding.cvss_data, unknown_data)
 
-        cleaned_findings = []
-        for f in findings:
-            f.refresh_from_db()
-            cleaned_findings.append(f)
-        # Assert severity was properly updated
-        self.assertEqual(cleaned_findings[0].severity, self.high_severity)
-        # Assert the positions were set properly
-        self.assertEqual(cleaned_findings[5].position, 1)
-        self.assertEqual(cleaned_findings[9].position, 5)
-        self.assertEqual(cleaned_findings[0].position, 1)
-        self.assertEqual(cleaned_findings[4].position, 5)
+    def test_exists_in_finding_library(self):
+        attached_finding = ReportFindingLinkFactory(added_as_blank=False)
+        blank_finding = ReportFindingLinkFactory(added_as_blank=True, title="Blank Finding Not in the Library")
+        self.assertTrue(attached_finding.exists_in_finding_library)
+        self.assertFalse(blank_finding.exists_in_finding_library)
 
-    def test_model_cleaning_severity_and_positon_changes(self):
-        report = ReportFactory()
-        num_of_findings = 5
-        findings = []
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.critical_severity),
-            )
-
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.high_severity),
-            )
-
-        # Bounce findings around to shuffle positions several times
-        findings[8].severity = self.critical_severity
-        findings[8].position = 2
-        findings[8].save()
-
-        findings[5].severity = self.critical_severity
-        findings[5].position = 1
-        findings[5].save()
-
-        findings[3].severity = self.high_severity
-        findings[3].position = 2
-        findings[3].save()
-
-        cleaned_findings = []
-        for f in findings:
-            f.refresh_from_db()
-            cleaned_findings.append(f)
-
-        # Assert ``severity`` and ``position`` changes committed correctly
-        self.assertEqual(cleaned_findings[8].severity, self.critical_severity)
-        self.assertEqual(cleaned_findings[8].position, 3)
-        self.assertEqual(cleaned_findings[5].severity, self.critical_severity)
-        self.assertEqual(cleaned_findings[5].position, 1)
-        self.assertEqual(cleaned_findings[3].severity, self.high_severity)
-        self.assertEqual(cleaned_findings[3].position, 2)
-        # Assert the ``position`` values updated properly for "Critical"
-        self.assertEqual(cleaned_findings[5].position, 1)
-        self.assertEqual(cleaned_findings[0].position, 2)
-        self.assertEqual(cleaned_findings[8].position, 3)
-        self.assertEqual(cleaned_findings[1].position, 4)
-        self.assertEqual(cleaned_findings[2].position, 5)
-        self.assertEqual(cleaned_findings[4].position, 6)
-        # Assert the ``position`` values updated properly for "High"
-        self.assertEqual(cleaned_findings[5].position, 1)
-        self.assertEqual(cleaned_findings[3].position, 2)
-        self.assertEqual(cleaned_findings[7].position, 3)
-        self.assertEqual(cleaned_findings[9].position, 4)
-
-    def test_position_set_to_zero(self):
-        report = ReportFactory()
-        finding = ReportFindingLinkFactory(report=report, severity=self.critical_severity)
-        finding.position = -10
-        finding.save()
-        finding.refresh_from_db()
-        # Assert the other ``position`` values updated properly
-        self.assertEqual(finding.position, 1)
-
-    def test_position_set_higher_than_count(self):
-        report = ReportFactory()
-        num_of_findings = 10
-        findings = []
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.critical_severity)
-            )
-        findings[0].position = 100
-        findings[0].save()
-        findings[0].refresh_from_db()
-        # Assert the other ``position`` values updated properly
-        self.assertEqual(findings[0].position, num_of_findings)
-
-    def test_position_change_on_delete(self):
-        report = ReportFactory()
-        num_of_findings = 5
-        findings = []
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.critical_severity),
-            )
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.high_severity),
-            )
-
-        # Delete several findings to create gaps in the severity groups
-        # Need to use atomic because ``TestCase`` and a ``post_delete`` Signal
-        with transaction.atomic():
-            findings[3].delete()
-            findings[5].delete()
-            findings[8].delete()
-
-        cleaned_findings = []
-        for f in findings:
-            try:
-                f.refresh_from_db()
-                cleaned_findings.append(f)
-            except self.ReportFindingLink.DoesNotExist:
-                pass
-
-        # Assert the ``position`` values updated properly for "Critical"
-        self.assertEqual(cleaned_findings[0].position, 1)
-        self.assertEqual(cleaned_findings[1].position, 2)
-        self.assertEqual(cleaned_findings[2].position, 3)
-        self.assertEqual(cleaned_findings[3].position, 4)
-        # Assert the ``position`` values updated properly for "High"
-        self.assertEqual(cleaned_findings[4].position, 1)
-        self.assertEqual(cleaned_findings[5].position, 2)
-        self.assertEqual(cleaned_findings[6].position, 3)
+        # Test a finding that's linked to a library finding
+        _ = FindingFactory(title="Blank Finding Not in the Library")
+        self.assertTrue(blank_finding.exists_in_finding_library)
 
 
 class EvidenceModelTests(TestCase):
@@ -528,22 +810,21 @@ class EvidenceModelTests(TestCase):
         # Delete
         evidence.delete()
         assert not self.Evidence.objects.all().exists()
-        assert not os.path.exists(evidence.document.path)
 
     def test_get_absolute_url(self):
         evidence = EvidenceFactory()
         try:
             evidence.get_absolute_url()
-        except:
+        except Exception:
             self.fail("Evidence.get_absolute_url() raised an exception")
+        evidence.delete()
 
     def test_file_extension_validator(self):
         evidence = EvidenceFactory(
-            document=factory.django.FileField(
-                filename="evidence.PnG", data=b"lorem ipsum"
-            )
+            document=factory.django.FileField(filename="ext_test.PnG", data=b"lorem ipsum")
         )
-        self.assertEqual(evidence.filename, "evidence.PnG")
+        self.assertRegexpMatches(evidence.filename, r"^ext_test[_0-9a-zA-Z]*\.PnG$")
+        evidence.delete()
 
     def test_prop_filename(self):
         evidence = EvidenceFactory()
@@ -552,18 +833,24 @@ class EvidenceModelTests(TestCase):
         except Exception:
             self.fail("Evidence model `filename` property failed unexpectedly!")
 
-    def test_delete_old_evidence_on_update_signal(self):
-        evidence = EvidenceFactory(
-            document=factory.django.FileField(
-                filename="evidence.txt", data=b"lorem ipsum"
-            )
+    def test_long_filename(self):
+        name = (
+            "In-mi-nisi-dignissim-nec-eleifend-sed-porta-eu-lacus-Sed-nunc-nisl-tristique-at-enim-bibendum-rutrum-sodales-ligula-Aliquam-quis-pharetra-sem-Morbi-nec-vestibulum-nunc-Nullam-urna-tortor-venenatis-et-nisi-ac-"
+            + "fringilla-sodales-sed"
         )
-        evidence.document = SimpleUploadedFile("new_evidence.txt", b"lorem ipsum")
-        evidence.save()
+        evidence = EvidenceFactory(document=factory.django.FileField(filename=name+".txt", data=b"lorem ipsum"))
+        self.assertRegexpMatches(evidence.filename, name + r"[_0-9a-zA-Z]*\.txt")
+        try:
+            evidence.get_absolute_url()
+        except Exception:
+            self.fail("Evidence.get_absolute_url() raised an exception")
+        evidence.delete()
 
-        self.assertTrue(evidence._current_evidence.path not in evidence.document.path)
-        self.assertFalse(os.path.exists(evidence._current_evidence.path))
-        self.assertTrue(os.path.exists(evidence.document.path))
+    def test_uploaded_by_user_property(self):
+        user = UserFactory()
+        evidence = EvidenceFactory(uploaded_by=user)
+        self.assertEqual(evidence.uploaded_by_user, user.username)
+        evidence.delete()
 
 
 class FindingNoteModelTests(TestCase):
@@ -652,3 +939,168 @@ class ArchiveModelTests(TestCase):
             archive.filename
         except Exception:
             self.fail("Archive model `filename` property failed unexpectedly!")
+
+class EmptyFieldFilteringReportExportTests(TestCase):
+    """Test that reproduces the <p></p> issue via actual report export functionality."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = UserFactory(password="testpass123", role="manager")
+        cls.client_obj = ClientFactory()
+        cls.project = ProjectFactory(client=cls.client_obj)
+        cls.report = ReportFactory(project=cls.project)
+        cls.severity = SeverityFactory(severity="High", weight=1, color="ff0000")
+        cls.finding_type = FindingTypeFactory(finding_type="Technical")
+
+        # Assign user to project so they can access the report
+        cls.assignment = ProjectAssignmentFactory(project=cls.project, operator=cls.user)
+
+    def test_json_export_with_empty_paragraph_tags(self):
+        """
+        Test that creates findings/observations with <p></p> tags and exports via
+        JSON endpoint to trigger ReportDataSerializer in the actual export pipeline.
+        """
+        # Create findings with <p></p> content (what rich text editor saves)
+        _ = ReportFindingLinkFactory(
+            title="Finding with Empty Rich Text Fields",
+            description="<p></p>",      # Rich text editor "empty" content
+            impact="<p></p>",           # Rich text editor "empty" content
+            mitigation="<p></p>",       # Rich text editor "empty" content
+            replication_steps="<p></p>", # Rich text editor "empty" content
+            references="<p></p>",       # Rich text editor "empty" content
+            report=self.report,
+            severity=self.severity,
+            finding_type=self.finding_type,
+            assigned_to=self.user,
+            position=1,
+        )
+
+        _ = ReportObservationLinkFactory(
+            title="Observation with Empty Rich Text Field",
+            description="<p></p>",      # Rich text editor "empty" content
+            report=self.report,
+            assigned_to=self.user,
+            position=1,
+        )
+
+        # Also create truly empty content for comparison
+        _ = ReportFindingLinkFactory(
+            title="Finding with Truly Empty Fields",
+            description="",             # Truly empty
+            impact="",                  # Truly empty
+            mitigation="",              # Truly empty
+            report=self.report,
+            severity=self.severity,
+            finding_type=self.finding_type,
+            assigned_to=self.user,
+            position=2,
+        )
+
+        # Use Django test client to call the actual JSON export endpoint
+
+        client = Client()
+        client.login(username=self.user.username, password="testpass123")
+
+        # Call the actual JSON export endpoint - this triggers ReportDataSerializer
+        json_export_url = reverse("reporting:generate_json", kwargs={"pk": self.report.pk})
+        response = client.get(json_export_url)
+
+        # Verify the export succeeded
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        # Parse the exported JSON (this is the ReportDataSerializer output)
+        exported_data = json.loads(response.content.decode('utf-8'))
+
+        # Verify we have the expected findings
+        self.assertEqual(len(exported_data['findings']), 2)
+        self.assertEqual(len(exported_data['observations']), 1)
+
+        # Find our test findings in the export
+        empty_tag_finding = None
+        truly_empty_finding = None
+
+        for finding in exported_data['findings']:
+            if finding['title'] == "Finding with Empty Rich Text Fields":
+                empty_tag_finding = finding
+            elif finding['title'] == "Finding with Truly Empty Fields":
+                truly_empty_finding = finding
+
+        # Verify we found our test data
+        self.assertIsNotNone(empty_tag_finding)
+        self.assertIsNotNone(truly_empty_finding)
+
+        # Get the observation
+        empty_tag_observation = exported_data['observations'][0]
+
+        # Template filtering logic that report templates use
+        def template_would_include_section(field_value):
+            """
+            Simulate Jinja2 template logic: {% if field_value %}...{% endif %}
+            This is what breaks in report templates when <p></p> is present.
+            """
+            return bool(field_value and field_value.strip())
+
+        # Test the filtering behavior - these should demonstrate the bug
+        empty_tag_desc_included = template_would_include_section(empty_tag_finding['description'])
+        empty_tag_impact_included = template_would_include_section(empty_tag_finding['impact'])
+        empty_tag_mitigation_included = template_would_include_section(empty_tag_finding['mitigation'])
+        empty_tag_obs_included = template_would_include_section(empty_tag_observation['description'])
+
+        truly_empty_desc_included = template_would_include_section(truly_empty_finding['description'])
+        truly_empty_impact_included = template_would_include_section(truly_empty_finding['impact'])
+
+        # These assertions should FAIL, demonstrating the issue
+        # When they fail, it proves that ReportDataSerializer is including <p></p> content
+        # which breaks report template filtering logic
+        self.assertFalse(empty_tag_desc_included,
+            "ReportDataSerializer should not include description sections with only <p></p> tags")
+        self.assertFalse(empty_tag_impact_included,
+            "ReportDataSerializer should not include impact sections with only <p></p> tags")
+        self.assertFalse(empty_tag_mitigation_included,
+            "ReportDataSerializer should not include mitigation sections with only <p></p> tags")
+        self.assertFalse(empty_tag_obs_included,
+            "ReportDataSerializer should not include observation sections with only <p></p> tags")
+
+        # These should pass (truly empty content should not be included)
+        self.assertFalse(truly_empty_desc_included,
+            "Truly empty description should not be included")
+        self.assertFalse(truly_empty_impact_included,
+            "Truly empty impact should not be included")
+
+    def test_export_report_json_class_directly(self):
+        """
+        Test the ExportReportJson class directly to verify ReportDataSerializer behavior.
+        """
+
+        # Create finding with <p></p> content
+        _ = ReportFindingLinkFactory(
+            title="Direct Export Test Finding",
+            description="<p></p>",
+            impact="<p></p>",
+            mitigation="<p></p>",
+            report=self.report,
+            severity=self.severity,
+            finding_type=self.finding_type,
+            assigned_to=self.user,
+        )
+
+        # Use ExportReportJson directly (this uses ReportDataSerializer internally)
+        exporter = ExportReportJson(self.report)
+        json_output = exporter.run()
+
+        # Parse the output
+        json_output.seek(0)
+        export_data = json.load(json_output)
+
+        # Verify the finding is in the export
+        self.assertEqual(len(export_data['findings']), 1)
+        finding_data = export_data['findings'][0]
+
+        # Template logic simulation
+        def jinja_check(value):
+            return bool(value)  # {% if value %} logic
+
+        # These should be False but will be True, demonstrating the bug
+        self.assertFalse(jinja_check(finding_data['description']),
+            "Direct ReportDataSerializer export includes <p></p> content incorrectly")

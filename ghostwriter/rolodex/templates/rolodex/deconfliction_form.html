@@ -1,0 +1,39 @@
+{% extends "base_generic.html" %}
+{% load crispy_forms_tags %}
+
+{% block pagetitle %}Deconfliction Form{% endblock %}
+
+
+{% block content %}
+    <header class="resource-form-page-heading mb-4">
+        <span class="detail-eyebrow">Deconfliction</span>
+        {% if object.pk %}
+            <h1>Edit {{ object.title }}</h1>
+            <p>Keep the alert timeline, response, and supporting context accurate for the engagement record.</p>
+        {% else %}
+            <h1>Record deconfliction event</h1>
+            <p>Capture an alert and the team's response in a timeline reviewers can follow.</p>
+        {% endif %}
+    </header>
+
+    <!-- Form Error Section -->
+    {% if form.errors %}
+        <script>
+            {% for field in form %}
+                {% for error in field.errors %}
+                    displayToastTop({type:'error', string:'{{ error|escapejs }}', context:'form'});
+                {% endfor %}
+            {% endfor %}
+            {% for error in form.non_field_errors %}
+                displayToastTop({type:'error', string:'{{ error|escapejs }}', context:'form'});
+            {% endfor %}
+        </script>
+    {% endif %}
+
+    <div class="resource-form-shell">
+        {% crispy form form.helper %}
+    </div>
+{% endblock %}
+
+{% block morescripts %}
+{% endblock %}

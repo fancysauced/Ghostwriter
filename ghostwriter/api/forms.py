@@ -1,0 +1,806 @@
+"""This contains all the forms used by the API application."""
+
+# Standard Libraries
+import base64
+import logging
+import re
+from binascii import Error as BinAsciiError
+from datetime import timedelta
+from os.path import splitext
+
+# Django Imports
+from django import forms
+from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.core.files.base import ContentFile
+from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
+
+# 3rd Party Libraries
+from crispy_forms.helper import FormHelper
+from crispy_forms.layout import HTML, Column, Div, Field, Layout, Row, Submit
+from docx import Document
+from pptx import Presentation
+
+# Ghostwriter Libraries
+from ghostwriter.api.models import (
+    ServicePrincipal,
+    ServiceTokenPreset,
+    ServiceTokenProjectScope,
+)
+from ghostwriter.api.utils import get_client_list
+from ghostwriter.commandcenter.models import GeneralConfiguration
+from ghostwriter.modules.reportwriter.filename import validate_filename_template
+from ghostwriter.oplog.models import Oplog
+from ghostwriter.reporting.models import (
+    Evidence,
+    EvidenceImageAlignmentOverride,
+    ReportTemplate,
+)
+from ghostwriter.reporting.validators import (
+    DOCX_ALLOWED_EXTENSIONS,
+    EVIDENCE_ALLOWED_EXTENSIONS,
+    PPTX_ALLOWED_EXTENSIONS,
+    TEMPLATE_ALLOWED_EXTENSIONS,
+)
+from ghostwriter.rolodex.models import Client, Project
+
+logger = logging.getLogger(__name__)
+CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def validate_no_control_characters(value):
+    """Reject control characters that can forge log lines or terminal output."""
+    if value and CONTROL_CHARACTER_RE.search(value):
+        raise ValidationError(
+            "Control characters are not allowed.",
+            code="control_characters",
+        )
+
+
+def validate_token_max_lifetime(expiry_date):
+    """Validate that the token expiration date is within the maximum allowed lifetime."""
+    if expiry_date is None:
+        return
+    general_config = GeneralConfiguration.get_solo()
+    max_expiry_date = general_config.token_max_expiry_date()
+    if expiry_date > max_expiry_date:
+        raise ValidationError(
+            f"Token expiration cannot be more than {general_config.token_max_lifetime_days} days from now",
+            code="max_token_lifetime",
+        )
+
+
+class ApiKeyForm(forms.Form):
+    """Save an individual :model:`api.APIKey`."""
+
+    name = forms.CharField(validators=[validate_no_control_characters])
+    expiry_date = forms.DateTimeField(
+        input_formats=[
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M",
+        ],
+    )
+
+    class Meta:
+        fields = [
+            "name",
+            "expiry_date",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields:
+            self.fields[field].widget.attrs["autocomplete"] = "off"
+        self.fields["expiry_date"].label = "Expiry Date & Time"
+        self.fields["expiry_date"].widget.input_type = "datetime-local"
+        self.fields["expiry_date"].initial = timezone.now() + timedelta(days=1)
+        self.fields["expiry_date"].help_text = (
+            f"Choose when this token expires. Ghostwriter uses the server time zone "
+            f"({settings.TIME_ZONE})."
+        )
+        self.fields["name"].help_text = (
+            "Use a name that identifies the script, integration, or device using it."
+        )
+        self.fields["name"].widget.attrs[
+            "placeholder"
+        ] = "API Token – Automation Script"
+        # Design form layout with Crispy FormHelper
+        self.helper = FormHelper()
+        self.helper.form_show_labels = True
+        self.helper.form_method = "post"
+        self.helper.form_class = "resource-edit-form token-create-form"
+        self.helper.layout = Layout(
+            Div(
+                HTML(
+                    """
+                    <div class="resource-form-section-heading">
+                      <span class="resource-form-section-icon"><i class="fas fa-key" aria-hidden="true"></i></span>
+                      <div>
+                        <h1>Create API token</h1>
+                        <p>Create a personal credential that authenticates with your current Ghostwriter permissions.</p>
+                      </div>
+                    </div>
+                    """
+                ),
+                Row(
+                    Column("name", css_class="col-md-6"),
+                    Column(
+                        Field("expiry_date", step=1),
+                        css_class="col-md-6",
+                    ),
+                    css_class="row g-3",
+                ),
+                HTML(
+                    """
+                    <div class="token-create-guidance">
+                      <i class="fas fa-info-circle" aria-hidden="true"></i>
+                      <p>The token value is displayed once after creation. Store it securely before leaving that screen.</p>
+                    </div>
+                    """
+                ),
+                css_class="resource-form-card",
+            ),
+            Div(
+                Div(
+                    HTML(
+                        """<a href="{{ cancel_link }}" class="btn btn-outline-secondary">Cancel</a>"""
+                    ),
+                    Submit(
+                        "submit_btn",
+                        "Create API Token",
+                        css_class="btn btn-primary",
+                    ),
+                    css_class="resource-form-actions-buttons",
+                ),
+                css_class="resource-form-actions resource-form-actions-compact",
+            ),
+        )
+
+    def clean_expiry_date(self):
+        expiry_date = self.cleaned_data["expiry_date"]
+
+        # Check if expiration comes before the creation date
+        if expiry_date:
+            if expiry_date < timezone.now():
+                raise ValidationError(
+                    "The API token expiration date cannot be in the past",
+                    code="invalid_expiry_date",
+                )
+            validate_token_max_lifetime(expiry_date)
+        return expiry_date
+
+
+class TokenExpiryForm(forms.Form):
+    """Update an existing token's expiry date."""
+
+    expiry_date = forms.DateTimeField(
+        input_formats=[
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M",
+        ],
+    )
+
+    def clean_expiry_date(self):
+        expiry_date = self.cleaned_data["expiry_date"]
+        if expiry_date and expiry_date < timezone.now():
+            raise ValidationError(
+                "The token expiration date cannot be in the past",
+                code="invalid_expiry_date",
+            )
+        validate_token_max_lifetime(expiry_date)
+        return expiry_date
+
+
+class ServiceTokenForm(forms.Form):
+    """Create a scoped service token."""
+
+    token_preset = forms.ChoiceField(
+        choices=[
+            (ServiceTokenPreset.OPLOG_RW, ServiceTokenPreset.OPLOG_RW.label),
+            (ServiceTokenPreset.PROJECT_READ, ServiceTokenPreset.PROJECT_READ.label),
+        ]
+    )
+    project_scope = forms.ChoiceField(
+        choices=[
+            (
+                ServiceTokenProjectScope.SELECTED,
+                ServiceTokenProjectScope.SELECTED.label,
+            ),
+            (
+                ServiceTokenProjectScope.SELECTED_CLIENTS,
+                ServiceTokenProjectScope.SELECTED_CLIENTS.label,
+            ),
+            (
+                ServiceTokenProjectScope.ALL_ACCESSIBLE,
+                ServiceTokenProjectScope.ALL_ACCESSIBLE.label,
+            ),
+        ],
+        initial=ServiceTokenProjectScope.SELECTED,
+        required=False,
+    )
+    name = forms.CharField(validators=[validate_no_control_characters])
+    service_principal = forms.ModelChoiceField(
+        queryset=ServicePrincipal.objects.none(), required=False
+    )
+    new_service_principal_name = forms.CharField(
+        required=False,
+        validators=[validate_no_control_characters],
+    )
+    oplog = forms.ModelChoiceField(
+        queryset=Oplog.objects.none(), empty_label=None, required=False
+    )
+    projects = forms.ModelMultipleChoiceField(
+        queryset=Project.objects.none(),
+        required=False,
+        widget=forms.SelectMultiple(attrs={"size": 10}),
+    )
+    clients = forms.ModelMultipleChoiceField(
+        queryset=Client.objects.none(),
+        required=False,
+        widget=forms.SelectMultiple(attrs={"size": 6}),
+    )
+    expiry_date = forms.DateTimeField(
+        input_formats=[
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M",
+        ],
+    )
+
+    class Meta:
+        fields = [
+            "token_preset",
+            "name",
+            "service_principal",
+            "new_service_principal_name",
+            "oplog",
+            "project_scope",
+            "clients",
+            "projects",
+            "expiry_date",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        user = kwargs.pop("user")
+        super().__init__(*args, **kwargs)
+        self.user = user
+        self.fields["service_principal"].queryset = ServicePrincipal.objects.filter(
+            active=True,
+            created_by=user,
+        ).order_by("name", "id")
+        self.fields["service_principal"].empty_label = "Create a New Service Principal"
+        self.fields["oplog"].queryset = Oplog.for_user(user).select_related(
+            "project", "project__client"
+        )
+        self.fields["projects"].queryset = Project.for_user(user).select_related(
+            "client"
+        )
+        self.fields["clients"].queryset = Client.for_user(user)
+        for field in self.fields:
+            self.fields[field].widget.attrs["autocomplete"] = "off"
+        self.fields["token_preset"].label = "Token Type"
+        self.fields[
+            "token_preset"
+        ].help_text = "Choose the scoped permissions this service token should receive"
+        self.fields["expiry_date"].label = "Expiry Date & Time"
+        self.fields["expiry_date"].widget.input_type = "datetime-local"
+        self.fields["expiry_date"].initial = timezone.now() + timedelta(days=1)
+        self.fields["expiry_date"].help_text = (
+            f"Choose when this token expires. Ghostwriter uses the server time zone "
+            f"({settings.TIME_ZONE})."
+        )
+        self.fields[
+            "name"
+        ].help_text = (
+            "Enter a token name to identify the assessment or environment later"
+        )
+        self.fields["name"].widget.attrs["placeholder"] = "Acme Q2 Assessment"
+        self.fields["service_principal"].label = "Service Principal"
+        self.fields[
+            "service_principal"
+        ].help_text = "Reuse an existing service principal, or leave blank and create a new one below"
+        self.fields["new_service_principal_name"].label = "New Service Principal Name"
+        self.fields[
+            "new_service_principal_name"
+        ].help_text = (
+            "Create a reusable service principal for the integration or automation"
+        )
+        self.fields["new_service_principal_name"].widget.attrs[
+            "placeholder"
+        ] = "Automation Service"
+        self.fields[
+            "oplog"
+        ].help_text = "Select the oplog this token can read from and write to"
+        self.fields["project_scope"].label = "Project Scope"
+        self.fields[
+            "project_scope"
+        ].help_text = "Choose selected projects, selected clients, or dynamically track all projects this user can access now and later"
+        self.fields["clients"].label = "Select Projects by Client"
+        self.fields[
+            "clients"
+        ].help_text = "Select one or more clients. Tokens dynamically read accessible projects for these clients, including future projects."
+        self.fields["projects"].help_text = (
+            "Select one or more projects this token can read. "
+            "Use Ctrl/Cmd-click to select multiple."
+        )
+        self.helper = FormHelper()
+        self.helper.form_show_labels = True
+        self.helper.form_method = "post"
+        self.helper.form_class = (
+            "resource-edit-form token-create-form service-token-create-form"
+        )
+        self.helper.layout = Layout(
+            Div(
+                HTML(
+                    """
+                    <div class="resource-form-section-heading">
+                      <span class="resource-form-section-icon"><i class="fas fa-id-badge" aria-hidden="true"></i></span>
+                      <div>
+                        <h1>Token identity</h1>
+                        <p>Name the credential, choose its permission preset, and set its lifetime.</p>
+                      </div>
+                    </div>
+                    """
+                ),
+                Row(
+                    Column("token_preset", css_class="col-12"),
+                    css_class="row g-3",
+                ),
+                Row(
+                    Column("name", css_class="col-md-6"),
+                    Column(
+                        Field("expiry_date", step=1),
+                        css_class="col-md-6",
+                    ),
+                    css_class="row g-3",
+                ),
+                css_class="resource-form-card",
+            ),
+            Div(
+                HTML(
+                    """
+                    <div class="resource-form-section-heading">
+                      <span class="resource-form-section-icon"><i class="fas fa-robot" aria-hidden="true"></i></span>
+                      <div>
+                        <h4>Service principal</h4>
+                        <p>Reuse an automation identity or create one for this integration.</p>
+                      </div>
+                    </div>
+                    """
+                ),
+                Row(
+                    Column("service_principal", css_class="col-md-6"),
+                    Column(
+                        "new_service_principal_name",
+                        css_class="col-md-6",
+                    ),
+                    css_class="row g-3",
+                ),
+                css_class="resource-form-card",
+            ),
+            Div(
+                HTML(
+                    """
+                    <div class="resource-form-section-heading">
+                      <span class="resource-form-section-icon"><i class="fas fa-lock" aria-hidden="true"></i></span>
+                      <div>
+                        <h4>Access scope</h4>
+                        <p>Limit this credential to the operation log or project data required by the integration.</p>
+                      </div>
+                    </div>
+                    """
+                ),
+                Row(
+                    Column("oplog", css_class="col-12"),
+                    css_class="row g-3",
+                    css_id="service-token-oplog-row",
+                ),
+                Row(
+                    Column("project_scope", css_class="col-12"),
+                    css_class="row g-3",
+                    css_id="service-token-project-scope-row",
+                ),
+                Row(
+                    Column("clients", css_class="col-12"),
+                    css_class="row g-3",
+                    css_id="service-token-clients-row",
+                ),
+                Row(
+                    Column("projects", css_class="col-12"),
+                    css_class="row g-3",
+                    css_id="service-token-projects-row",
+                ),
+                css_class="resource-form-card",
+            ),
+            Div(
+                Div(
+                    HTML(
+                        """<a href="{{ cancel_link }}" class="btn btn-outline-secondary">Cancel</a>"""
+                    ),
+                    Submit(
+                        "submit_btn",
+                        "Create Service Token",
+                        css_class="btn btn-primary",
+                    ),
+                    css_class="resource-form-actions-buttons",
+                ),
+                css_class="resource-form-actions resource-form-actions-compact",
+            ),
+        )
+
+    def clean_expiry_date(self):
+        expiry_date = self.cleaned_data["expiry_date"]
+        if expiry_date and expiry_date < timezone.now():
+            raise ValidationError(
+                "The service token expiration date cannot be in the past",
+                code="invalid_expiry_date",
+            )
+        validate_token_max_lifetime(expiry_date)
+        return expiry_date
+
+    def clean_oplog(self):
+        oplog = self.cleaned_data.get("oplog")
+        if oplog is None:
+            return oplog
+        if not oplog.user_can_edit(self.user):
+            raise ValidationError(
+                "You do not have permission to create a service token for this oplog"
+            )
+        return oplog
+
+    def clean_projects(self):
+        projects = self.cleaned_data.get("projects")
+        if projects is None:
+            return projects
+        for project in projects:
+            if not project.user_can_view(self.user):
+                raise ValidationError(
+                    "You do not have permission to create a service token for this project"
+                )
+        return projects
+
+    def clean_clients(self):
+        clients = self.cleaned_data.get("clients")
+        if clients is None:
+            return clients
+        for client in clients:
+            if not client.user_can_view(self.user):
+                raise ValidationError(
+                    "You do not have permission to create a service token for this client"
+                )
+        return clients
+
+    def clean(self):
+        cleaned_data = super().clean()
+        token_preset = cleaned_data.get("token_preset")
+        service_principal = cleaned_data.get("service_principal")
+        new_service_principal_name = (
+            cleaned_data.get("new_service_principal_name") or ""
+        ).strip()
+        oplog = cleaned_data.get("oplog")
+        project_scope = (
+            cleaned_data.get("project_scope") or ServiceTokenProjectScope.SELECTED
+        )
+        cleaned_data["project_scope"] = project_scope
+        projects = cleaned_data.get("projects")
+        clients = cleaned_data.get("clients")
+
+        if service_principal and new_service_principal_name:
+            msg = "Select an existing service principal or enter a new one, not both"
+            self.add_error("service_principal", msg)
+            self.add_error("new_service_principal_name", msg)
+        elif not service_principal and not new_service_principal_name:
+            msg = "Select an existing service principal or enter a new one"
+            self.add_error("service_principal", msg)
+            self.add_error("new_service_principal_name", msg)
+        elif new_service_principal_name:
+            existing = ServicePrincipal.objects.filter(
+                active=True,
+                created_by=self.user,
+                name__iexact=new_service_principal_name,
+            ).first()
+            if existing:
+                cleaned_data["service_principal"] = existing
+                cleaned_data["new_service_principal_name"] = ""
+            else:
+                cleaned_data["new_service_principal_name"] = new_service_principal_name
+
+        if token_preset == ServiceTokenPreset.OPLOG_RW:
+            if oplog is None:
+                self.add_error("oplog", "Select an oplog for an oplog read/write token")
+            cleaned_data["project_scope"] = ServiceTokenProjectScope.SELECTED
+            cleaned_data["clients"] = Client.objects.none()
+            cleaned_data["projects"] = Project.objects.none()
+        elif token_preset == ServiceTokenPreset.PROJECT_READ:
+            if project_scope == ServiceTokenProjectScope.SELECTED_CLIENTS:
+                if not clients:
+                    self.add_error(
+                        "clients",
+                        "Select at least one client for a client-scoped project read-only token",
+                    )
+                cleaned_data["projects"] = Project.objects.none()
+            elif project_scope == ServiceTokenProjectScope.SELECTED and not projects:
+                self.add_error(
+                    "projects",
+                    "Select at least one project for a project read-only token",
+                )
+            elif project_scope == ServiceTokenProjectScope.ALL_ACCESSIBLE:
+                cleaned_data["clients"] = Client.objects.none()
+                cleaned_data["projects"] = Project.objects.none()
+            elif project_scope == ServiceTokenProjectScope.SELECTED:
+                cleaned_data["clients"] = Client.objects.none()
+            cleaned_data["oplog"] = None
+
+        return cleaned_data
+
+
+class Base64BytesField(forms.Field):
+    def to_python(self, value):
+        value = super().to_python(value)
+        if value is None:
+            return None
+        try:
+            blob = base64.b64decode(value, validate=True)
+        except BinAsciiError as err:
+            raise ValidationError("Invalid base64 data", code="invalid") from err
+        return blob
+
+
+class ApiEvidenceForm(forms.ModelForm):
+    file_base64 = Base64BytesField(required=True)
+    filename = forms.CharField(required=True)
+
+    class Meta:
+        model = Evidence
+        fields = (
+            "friendly_name",
+            "description",
+            "caption",
+            "tags",
+            "report",
+        )
+
+    def __init__(self, *args, **kwargs):
+        self.user_obj = kwargs.pop("user_obj")
+        report_queryset = kwargs.pop("report_queryset")
+        super().__init__(*args, **kwargs)
+        self.fields["report"].queryset = report_queryset
+
+    def clean_filename(self):
+        _, ext = splitext(self.cleaned_data["filename"])
+        if (
+            not ext.startswith(".")
+            or ext[1:].lower() not in EVIDENCE_ALLOWED_EXTENSIONS
+        ):
+            raise ValidationError(
+                f'File extension "{ext}" is not allowed', code="invalid"
+            )
+        return self.cleaned_data["filename"]
+
+    def has_legacy_finding_value(self):
+        empty_values = (None, "", [], {}, ())
+        return any(self.data.get(field_name) not in empty_values for field_name in ("finding", "findingId"))
+
+    def clean(self):
+        cleaned_data = super().clean()
+
+        report = None
+        if self.has_legacy_finding_value():
+            self.add_error(
+                "report",
+                ValidationError(
+                    _("Evidence can only be associated with a report."),
+                    "finding_evidence_removed",
+                ),
+            )
+
+        if "report" in cleaned_data:
+            report = cleaned_data["report"]
+
+        if report is not None and "friendly_name" in cleaned_data:
+            # Validate that evidence name is unique
+            name = cleaned_data["friendly_name"]
+            if report.evidence_set.filter(friendly_name=name).exists():
+                self.add_error(
+                    "friendly_name",
+                    ValidationError(
+                        _(
+                            "This friendly name has already been used for a file attached to this report."
+                        ),
+                        "duplicate",
+                    ),
+                )
+
+        return cleaned_data
+
+    def save(self, commit=True):
+        instance = super().save(False)
+        blob = ContentFile(
+            self.cleaned_data["file_base64"], name=self.cleaned_data["filename"]
+        )
+        instance.document = blob
+        instance.uploaded_by = self.user_obj
+        if commit:
+            instance.save()
+            self.save_m2m()
+        return instance
+
+
+class ApiReportTemplateForm(forms.ModelForm):
+    file_base64 = Base64BytesField(required=True)
+    filename = forms.CharField(required=True)
+
+    class Meta:
+        model = ReportTemplate
+        fields = (
+            "name",
+            "description",
+            "protected",
+            "changelog",
+            "landscape",
+            "filename_override",
+            "tags",
+            "doc_type",
+            "client",
+            "p_style",
+            "bloodhound_heading_offset",
+            "evidence_image_width",
+            "evidence_image_alignment",
+        )
+
+    def __init__(self, *args, **kwargs):
+        self.user_obj = kwargs.pop("user_obj")
+        super().__init__(*args, **kwargs)
+        if not self.user_obj.can_manage_report_templates:
+            self.fields.pop("protected", None)
+            self.fields["client"].required = True
+        self.fields["client"].queryset = get_client_list(self.user_obj)
+        self.fields["evidence_image_width"].required = False
+        self.fields["evidence_image_alignment"].required = False
+
+    def clean_evidence_image_alignment(self):
+        value = self.cleaned_data.get("evidence_image_alignment")
+        if not value:
+            return EvidenceImageAlignmentOverride.USE_GLOBAL
+        return value
+
+    def _validate_filename_override(self, cleaned_data):
+        filename_override = cleaned_data.get("filename_override")
+        doc_type = cleaned_data.get("doc_type")
+        if filename_override and doc_type:
+            try:
+                validate_filename_template(filename_override, doc_type)
+            except ValidationError as exc:
+                self.add_error("filename_override", exc)
+
+    def _validate_template_scope(self, cleaned_data):
+        client = cleaned_data.get("client")
+        if "client" not in self.errors and not ReportTemplate.user_can_create(
+            self.user_obj, client
+        ):
+            self.add_error(
+                "client",
+                ValidationError(
+                    _(
+                        "Report template management permission is required to use global scope."
+                    ),
+                    code="global_template_permission",
+                ),
+            )
+
+    def _validate_file_extension(self, cleaned_data):
+        """Validate and return the normalized template file extension."""
+        filename = cleaned_data.get("filename", "")
+        ext = splitext(filename)[1]
+        normalized_ext = ext[1:].lower() if ext.startswith(".") else ""
+        if normalized_ext not in TEMPLATE_ALLOWED_EXTENSIONS:
+            self.add_error(
+                "filename",
+                ValidationError(
+                    f'File extension "{ext}" is not allowed for a report template',
+                    code="invalid",
+                ),
+            )
+        return normalized_ext
+
+    def _validate_document_type(self, cleaned_data, extension):
+        """Ensure the uploaded file type matches the selected document type."""
+        doc_type = cleaned_data.get("doc_type")
+        if not doc_type:
+            return
+
+        extension_mismatch = (
+            extension in DOCX_ALLOWED_EXTENSIONS
+            and doc_type.extension not in DOCX_ALLOWED_EXTENSIONS
+        ) or (
+            extension in PPTX_ALLOWED_EXTENSIONS
+            and doc_type.extension not in PPTX_ALLOWED_EXTENSIONS
+        )
+        if extension_mismatch:
+            self.add_error(
+                "filename",
+                ValidationError(
+                    f"File extension '.{extension}' does not match the selected document type '{doc_type.name}'",
+                    code="mismatch",
+                ),
+            )
+
+    def _validate_office_document(
+        self, cleaned_data, extension, allowed_extensions, document_class, label
+    ):
+        """Ensure an uploaded Office template can be opened by its parser."""
+        filename = cleaned_data.get("filename")
+        file_data = cleaned_data.get("file_base64")
+        if not filename or file_data is None or extension not in allowed_extensions:
+            return
+
+        try:
+            document_class(ContentFile(file_data, name=filename))
+        except ValueError as exc:
+            logger.error(
+                "Could not open this template. %s, from %s as a Microsoft %s document: %s",
+                filename,
+                self.user_obj,
+                label,
+                exc,
+            )
+            self.add_error(
+                "file_base64",
+                ValidationError(
+                    f"Could not open this template as a Microsoft {label} document",
+                    code="invalid",
+                ),
+            )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        self._validate_filename_override(cleaned_data)
+        self._validate_template_scope(cleaned_data)
+        extension = self._validate_file_extension(cleaned_data)
+        self._validate_document_type(cleaned_data, extension)
+        self._validate_office_document(
+            cleaned_data, extension, DOCX_ALLOWED_EXTENSIONS, Document, "Word"
+        )
+        self._validate_office_document(
+            cleaned_data, extension, PPTX_ALLOWED_EXTENSIONS, Presentation, "PowerPoint"
+        )
+        return cleaned_data
+
+    def save(self, commit=True):
+        instance = super().save(False)
+        blob = ContentFile(
+            self.cleaned_data["file_base64"], name=self.cleaned_data["filename"]
+        )
+        instance.document = blob
+        instance.uploaded_by = self.user_obj
+        if commit:
+            instance.save()
+            self.save_m2m()
+        return instance
+
+
+class ApiOplogRecordingForm(forms.Form):
+    """Validate and prepare an Asciinema recording upload for an :model:`oplog.OplogEntry`."""
+
+    file_base64 = Base64BytesField(required=True)
+    filename = forms.CharField(required=True)
+    oplog_entry_id = forms.IntegerField(required=True)
+
+    def clean_filename(self):
+        filename = self.cleaned_data["filename"]
+        filename_lower = filename.lower()
+        # Accept .cast or .cast.gz extensions
+        if not (
+            filename_lower.endswith(".cast") or filename_lower.endswith(".cast.gz")
+        ):
+            raise ValidationError(
+                "File extension is not allowed. Only .cast and .cast.gz files are accepted.",
+                code="invalid",
+            )
+        return filename

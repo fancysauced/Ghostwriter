@@ -112,6 +112,9 @@ build/Release
 
 # Dependency directories
 node_modules/
+
+# Playwright regression artifacts
+test-artifacts/playwright/
 jspm_packages/
 
 # Typescript v1 declaration files
@@ -278,3 +281,15 @@ ssl/dhparam.pem
 
 # Temporary ignore of Cypress front end testing data
 cypress/*
+
+# Ignore renamed CLI binary
+ghostwriter-cli
+
+.gwcli-last-update-check
+
+# Ignore any *.cast or *.cast.gz files
+*.cast
+*.cast.gz
+
+# Ignore any QA testing artifacts
+.playwright-mcp/*

@@ -3,34 +3,34 @@
 
 {% block pagetitle %}Oplog Creation{% endblock %}
 
-{% block breadcrumbs %}
-    <nav aria-label="breadcrumb">
-        <ul class="breadcrumb">
-            <li class="breadcrumb-item"><a href="{% url 'home:dashboard' %}">Dashboard</a></li>
-            <li class="breadcrumb-item"><a href="{% url 'oplog:index' %}">Operation Logs</a></li>
-            <li class="breadcrumb-item active" aria-current="page">Log Form</li>
-        </ul>
-    </nav>
-{% endblock %}
 
 {% block content %}
-    <!-- Instructions Section -->
-    <p>Provide a meaningful name for your log and select the project to which it should associated:</p>
+    <header class="resource-form-page-heading mb-4">
+        <span class="detail-eyebrow">Operation Log</span>
+        {% if object.pk %}
+            <h1>Edit {{ object.name }}</h1>
+            <p>Keep the log name and engagement association clear for operators.</p>
+        {% else %}
+            <h1>Create operation log</h1>
+            <p>Open a shared timeline for an active engagement.</p>
+        {% endif %}
+    </header>
 
     <!-- Form Error Section -->
     {% if form.errors %}
         <script>
             {% for field in form %}
                 {% for error in field.errors %}
-                    displayToastTop({type:'error', string:'{{ error }}', context:'form'});
+                    displayToastTop({type:'error', string:'{{ error|escapejs }}', context:'form'});
                 {% endfor %}
             {% endfor %}
             {% for error in form.non_field_errors %}
-                displayToastTop({type:'error', string:'{{ error }}', context:'form'});
+                displayToastTop({type:'error', string:'{{ error|escapejs }}', context:'form'});
             {% endfor %}
         </script>
     {% endif %}
 
-    <!-- Form Section -->
-    {% crispy form form.helper %}
+    <div class="resource-form-shell">
+        {% crispy form form.helper %}
+    </div>
 {% endblock %}

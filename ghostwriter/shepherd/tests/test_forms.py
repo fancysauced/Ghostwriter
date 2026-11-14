@@ -13,12 +13,14 @@ from ghostwriter.factories import (
     DomainServerConnectionFactory,
     DomainStatusFactory,
     HistoryFactory,
+    ProjectAssignmentFactory,
     ProjectFactory,
     ServerHistoryFactory,
     ServerNoteFactory,
     ServerStatusFactory,
     StaticServerFactory,
     TransientServerFactory,
+    UserFactory,
 )
 from ghostwriter.shepherd.forms import (
     BurnForm,
@@ -37,6 +39,8 @@ from ghostwriter.shepherd.forms_server import (
 )
 
 logging.disable(logging.CRITICAL)
+
+PASSWORD = "SuperNaturalReporting!"
 
 
 def instantiate_formset(formset_class, data, instance=None, initial=None):
@@ -63,46 +67,83 @@ class CheckoutFormTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
+        cls.available_status = DomainStatusFactory(domain_status="Available")
         cls.unavailable_status = DomainStatusFactory(domain_status="Unavailable")
-        cls.domain = DomainFactory(expiration=date.today() + timedelta(days=360))
+        cls.domain = DomainFactory(
+            name="checkout-available.example",
+            expiration=date.today() + timedelta(days=360),
+            expired=False,
+            auto_renew=True,
+            domain_status=cls.available_status,
+        )
         cls.unavailable_domain = DomainFactory(
+            name="checkout-unavailable.example",
             domain_status=cls.unavailable_status,
             expiration=date.today() + timedelta(days=360),
+            expired=False,
+            auto_renew=True,
         )
-        cls.expired_domain = DomainFactory(expiration=date.today() - timedelta(days=30))
+        cls.expired_domain = DomainFactory(
+            name="checkout-expired.example",
+            expiration=date.today() - timedelta(days=30),
+            auto_renew=False,
+            expired=False,
+            domain_status=cls.available_status,
+        )
+        cls.auto_renew_expired_domain = DomainFactory(
+            name="checkout-auto-renew-expired.example",
+            expiration=date.today() - timedelta(days=30),
+            auto_renew=True,
+            expired=False,
+            domain_status=cls.available_status,
+        )
+        cls.set_expired_domain = DomainFactory(
+            name="checkout-set-expired.example",
+            expiration=date.today() + timedelta(days=30),
+            auto_renew=True,
+            expired=True,
+            domain_status=cls.available_status,
+        )
         cls.project = ProjectFactory()
+        cls.user = UserFactory(password=PASSWORD)
+        ProjectAssignmentFactory(operator=cls.user, project=cls.project)
+        cls.other_user = UserFactory(password=PASSWORD)
 
     def setUp(self):
         pass
 
     def form_data(
         self,
+        domain_id=None,
         start_date=None,
         end_date=None,
         note=None,
-        domain_id=None,
         client_id=None,
         project_id=None,
         activity_type_id=None,
+        user=None,
         **kwargs,
     ):
         return CheckoutForm(
             data={
+                "domain": domain_id,
                 "start_date": start_date,
                 "end_date": end_date,
                 "note": note,
-                "domain": domain_id,
                 "client": client_id,
                 "project": project_id,
                 "activity_type": activity_type_id,
             },
+            user=user,
         )
 
     def test_valid_data(self):
-        checkout = HistoryFactory(
-            client=self.project.client, project=self.project, domain=self.domain
-        )
-        form = self.form_data(**checkout.__dict__)
+        checkout = HistoryFactory(client=self.project.client, project=self.project, domain=self.domain)
+        form = self.form_data(**checkout.__dict__, user=self.other_user)
+        self.assertFalse(form.is_valid())
+        self.assertEqual(form.errors.as_data()["client"][0].code, "invalid_choice")
+
+        form = self.form_data(**checkout.__dict__, user=self.user)
         self.assertTrue(form.is_valid())
 
     def test_invalid_dates(self):
@@ -115,7 +156,7 @@ class CheckoutFormTests(TestCase):
             start_date=start_date,
             end_date=end_date,
         )
-        form = self.form_data(**checkout.__dict__)
+        form = self.form_data(**checkout.__dict__, user=self.user)
         errors = form["end_date"].errors.as_data()
 
         self.assertEqual(len(errors), 1)
@@ -127,17 +168,31 @@ class CheckoutFormTests(TestCase):
             project=self.project,
             domain=self.unavailable_domain,
         )
-        form = self.form_data(**checkout.__dict__)
+        form = self.form_data(**checkout.__dict__, user=self.user)
         errors = form["domain"].errors.as_data()
 
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "unavailable")
 
     def test_expired_domain(self):
+        # A domain with an expiration date in the past that is NOT set to auto-renew should fail validation
+        checkout = HistoryFactory(client=self.project.client, project=self.project, domain=self.expired_domain)
+        form = self.form_data(**checkout.__dict__, user=self.user)
+        errors = form["domain"].errors.as_data()
+
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].code, "expired")
+
+        # A domain with an expiration date in the past that is set to auto-renew should pass validation
         checkout = HistoryFactory(
-            client=self.project.client, project=self.project, domain=self.expired_domain
+            client=self.project.client, project=self.project, domain=self.auto_renew_expired_domain
         )
-        form = self.form_data(**checkout.__dict__)
+        form = self.form_data(**checkout.__dict__, user=self.user)
+        self.assertTrue(form.is_valid())
+
+        # A domain flagged as expired should fail validation even with a good expiration date
+        checkout = HistoryFactory(client=self.project.client, project=self.project, domain=self.set_expired_domain)
+        form = self.form_data(**checkout.__dict__, user=self.user)
         errors = form["domain"].errors.as_data()
 
         self.assertEqual(len(errors), 1)
@@ -162,14 +217,7 @@ class DomainFormTests(TestCase):
         expiration=None,
         last_health_check=None,
         vt_permalink=None,
-        ibm_xforce_cat=None,
-        talos_cat=None,
-        bluecoat_cat=None,
-        fortiguard_cat=None,
-        opendns_cat=None,
-        trendmicro_cat=None,
-        mx_toolbox_status=None,
-        note=None,
+        description=None,
         burned_explanation=None,
         auto_renew=None,
         reset_dns=None,
@@ -186,14 +234,7 @@ class DomainFormTests(TestCase):
                 "expiration": expiration,
                 "last_health_check": last_health_check,
                 "vt_permalink": vt_permalink,
-                "ibm_xforce_cat": ibm_xforce_cat,
-                "talos_cat": talos_cat,
-                "bluecoat_cat": bluecoat_cat,
-                "fortiguard_cat": fortiguard_cat,
-                "opendns_cat": opendns_cat,
-                "trendmicro_cat": trendmicro_cat,
-                "mx_toolbox_status": mx_toolbox_status,
-                "note": note,
+                "description": description,
                 "burned_explanation": burned_explanation,
                 "auto_renew": auto_renew,
                 "reset_dns": reset_dns,
@@ -214,6 +255,31 @@ class DomainFormTests(TestCase):
 
         form = self.form_data(**domain_dict)
         self.assertTrue(form.is_valid())
+
+    def test_rejects_script_delimiters_in_domain_name(self):
+        domain = DomainFactory()
+        domain_dict = domain.__dict__.copy()
+        domain_dict["name"] = "'+alert(1)+'"
+
+        form = self.form_data(**domain_dict)
+
+        self.assertEqual(form.errors["name"].as_data()[0].code, "invalid_domain_name")
+
+    def test_rejects_existing_domain_name(self):
+        domain = DomainFactory(name="existing.example")
+        domain_dict = domain.__dict__.copy()
+        domain_dict["name"] = "EXISTING.EXAMPLE"
+
+        form = self.form_data(**domain_dict)
+
+        self.assertEqual(form.errors["name"].as_data()[0].code, "unique")
+
+    def test_allows_unchanged_domain_name(self):
+        domain = DomainFactory(name="existing.example")
+        form = self.form_data(**domain.__dict__)
+        form.instance = domain
+
+        self.assertTrue(form.is_valid(), form.errors)
 
     def test_invalid_dates(self):
         end_date = date.today()
@@ -256,7 +322,6 @@ class DomainLinkFormTests(TestCase):
         static_server_id=None,
         transient_server_id=None,
         activity_type_id=None,
-        project_id=None,
         **kwargs,
     ):
         return DomainLinkForm(
@@ -265,7 +330,6 @@ class DomainLinkFormTests(TestCase):
                 "static_server": static_server_id,
                 "transient_server": transient_server_id,
                 "activity_type": activity_type_id,
-                "project": project_id,
             },
             project=self.project,
         )
@@ -358,6 +422,16 @@ class DomainNoteFormTests(TestCase):
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "required")
 
+    def test_refreshed_layout(self):
+        form = self.form_data()
+
+        self.assertTrue(form.helper.form_show_labels)
+        self.assertEqual(form.helper.layout.fields[0].css_class, "resource-note-field")
+        self.assertEqual(
+            form.helper.layout.fields[1].css_class,
+            "resource-form-actions resource-note-actions",
+        )
+
 
 class ServerNoteFormTests(TestCase):
     """Collection of tests for :form:`shepherd.ServerNoteForm`."""
@@ -395,9 +469,6 @@ class ServerNoteFormTests(TestCase):
         errors = form["note"].errors.as_data()
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "required")
-
-
-# TODO
 
 
 class AuxServerAddressFormTests(TestCase):
@@ -442,9 +513,7 @@ class ServerAddressFormSetTests(TestCase):
         cls.server_dict = cls.server.__dict__
         cls.aux_addy_1 = AuxServerAddressFactory(static_server=cls.server, primary=False)
         cls.aux_addy_2 = AuxServerAddressFactory(static_server=cls.server, primary=False)
-        cls.to_be_deleted = AuxServerAddressFactory(
-            static_server=cls.server, primary=False
-        )
+        cls.to_be_deleted = AuxServerAddressFactory(static_server=cls.server, primary=False)
 
     def form_data(self, data, **kwargs):
         return instantiate_formset(ServerAddressFormSet, data=data, instance=self.server)
@@ -518,7 +587,7 @@ class ServerFormTests(TestCase):
         name=None,
         server_status_id=None,
         server_provider_id=None,
-        note=None,
+        description=None,
         **kwargs,
     ):
         return ServerForm(
@@ -527,7 +596,7 @@ class ServerFormTests(TestCase):
                 "name": name,
                 "server_status": server_status_id,
                 "server_provider": server_provider_id,
-                "note": note,
+                "description": description,
             },
         )
 
@@ -538,8 +607,17 @@ class ServerFormTests(TestCase):
         form = self.form_data(**server)
         self.assertTrue(form.is_valid())
 
+    def test_rejects_script_delimiters_in_server_name(self):
+        server = self.server_dict.copy()
+        server["ip_address"] = "1.1.1.1"
+        server["name"] = "'+alert(1)+'"
 
-class ServerCheckoutFormSetTests(TestCase):
+        form = self.form_data(**server)
+
+        self.assertEqual(form.errors["name"].as_data()[0].code, "invalid_server_name")
+
+
+class ServerCheckoutFormTests(TestCase):
     """Collection of tests for :form:`shepherd.ServerCheckoutForm`."""
 
     @classmethod
@@ -548,6 +626,9 @@ class ServerCheckoutFormSetTests(TestCase):
         cls.server = StaticServerFactory()
         cls.unavailable_server = StaticServerFactory(server_status=cls.unavailable_status)
         cls.project = ProjectFactory()
+        cls.user = UserFactory(password=PASSWORD)
+        ProjectAssignmentFactory(operator=cls.user, project=cls.project)
+        cls.other_user = UserFactory(password=PASSWORD)
 
     def setUp(self):
         pass
@@ -562,6 +643,7 @@ class ServerCheckoutFormSetTests(TestCase):
         project_id=None,
         activity_type_id=None,
         server_role_id=None,
+        user=None,
         **kwargs,
     ):
         return ServerCheckoutForm(
@@ -575,14 +657,16 @@ class ServerCheckoutFormSetTests(TestCase):
                 "project": project_id,
                 "activity_type": activity_type_id,
             },
+            user=user,
         )
 
     def test_valid_data(self):
-        checkout = ServerHistoryFactory(
-            client=self.project.client, project=self.project, server=self.server
-        )
+        checkout = ServerHistoryFactory(client=self.project.client, project=self.project, server=self.server)
+        form = self.form_data(**checkout.__dict__, user=self.other_user)
+        self.assertFalse(form.is_valid())
+        self.assertEqual(form.errors.as_data()["client"][0].code, "invalid_choice")
 
-        form = self.form_data(**checkout.__dict__)
+        form = self.form_data(**checkout.__dict__, user=self.user)
         self.assertTrue(form.is_valid())
 
     def test_invalid_dates(self):
@@ -595,7 +679,7 @@ class ServerCheckoutFormSetTests(TestCase):
             start_date=start_date,
             end_date=end_date,
         )
-        form = self.form_data(**checkout.__dict__)
+        form = self.form_data(**checkout.__dict__, user=self.user)
         errors = form["end_date"].errors.as_data()
 
         self.assertEqual(len(errors), 1)
@@ -607,7 +691,7 @@ class ServerCheckoutFormSetTests(TestCase):
             project=self.project,
             server=self.unavailable_server,
         )
-        form = self.form_data(**checkout.__dict__)
+        form = self.form_data(**checkout.__dict__, user=self.user)
         errors = form["server"].errors.as_data()
 
         self.assertEqual(len(errors), 1)
@@ -622,6 +706,9 @@ class TransientServerFormTests(TestCase):
         cls.project = ProjectFactory()
         cls.server = TransientServerFactory(project=cls.project)
         cls.server_dict = cls.server.__dict__
+        cls.user = UserFactory(password=PASSWORD)
+        ProjectAssignmentFactory(operator=cls.user, project=cls.project)
+        cls.other_user = UserFactory(password=PASSWORD)
 
     def setUp(self):
         pass
@@ -634,8 +721,7 @@ class TransientServerFormTests(TestCase):
         activity_type_id=None,
         server_role_id=None,
         server_provider_id=None,
-        note=None,
-        project_id=None,
+        description=None,
         **kwargs,
     ):
         return TransientServerForm(
@@ -649,8 +735,7 @@ class TransientServerFormTests(TestCase):
                 "activity_type": activity_type_id,
                 "server_role": server_role_id,
                 "server_provider": server_provider_id,
-                "note": note,
-                "project": project_id,
+                "description": description,
             },
         )
 

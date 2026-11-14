@@ -1,13 +1,28 @@
-{% extends "base_generic.html" %}
+{% extends "base_generic_empty.html" %}
 
-{% block title %}Server Error{% endblock %}
+{% load static %}
+
+{% block title %}Service interruption · Ghostwriter{% endblock %}
 
 {% block content %}
-    <h2>Ooops!!! 500</h2>
-
-    <h3>Looks like something went wrong!</h3>
-
-    <p>We track these errors automatically, but if the problem persists feel free to contact us. In the meantime, try refreshing.</p>
+    <section class="error-state-page error-state--failure" aria-labelledby="error-state-title">
+        <article class="error-state-card">
+            <header class="error-state-header">
+                <div class="error-state-code" aria-label="Status code 500">500</div>
+                <img class="error-state-art" src="{% static 'images/scared.png' %}" alt="" aria-hidden="true">
+                <div>
+                    <span class="detail-eyebrow">Service interruption</span>
+                    <h1 id="error-state-title">Ghostwriter could not complete that request</h1>
+                    <p>An unexpected server condition interrupted this action. Your administrator can review the server logs for details.</p>
+                </div>
+            </header>
+            <div class="error-state-guidance">
+                <i class="fas fa-clipboard-list" aria-hidden="true"></i>
+                <p>Note the time and steps leading up to the error, then share them with your Ghostwriter administrator if it happens again.</p>
+            </div>
+            <footer class="error-state-actions">
+                <a href="{% url 'home:dashboard' %}" class="btn btn-primary"><i class="fas fa-home" aria-hidden="true"></i> Return to dashboard</a>
+            </footer>
+        </article>
+    </section>
 {% endblock content %}
-
-

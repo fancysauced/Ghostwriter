@@ -1,0 +1,48 @@
+{% load bleach_tags %}
+
+<div id="project_detail_{{ project.id }}" class="modal fade detail-preview-modal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-super-sized modal-dialog-scrollable modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <span class="detail-preview-modal-eyebrow">Project preview</span>
+          <h2 class="modal-title">{{ project }}</h2>
+        </div>
+        <button type="button" class="btn-close detail-preview-modal-close" data-bs-dismiss="modal" aria-label="Close">
+        </button>
+      </div>
+      <div class="modal-body">
+
+        {% if project.tags.all %}<div class="detail-preview-modal-tags">{% for tag in project.tags.all %}<span class="detail-preview-modal-tag">{{ tag.name }}</span>{% endfor %}</div>{% endif %}
+
+        <h5>Project Description</h5>
+        {% if project.description %}
+          {{ project.description|bleach|safe }}
+        {% else %}
+          <p>No one has added a description of this project. <a class="clickable" href="{% url 'rolodex:project_update' project.id %}">Fix that here.</a></p>
+        {% endif %}
+
+        <h5>Team Assignments</h5>
+        {% if project.projectassignment_set.all %}
+          {% for operator in project.projectassignment_set.all %}
+            <a class="clickable" href="{{ operator.operator.get_absolute_url }}">
+              {% if operator.operator.name %}
+                {{ operator.operator.name }}
+              {% else %}
+                Missing Full Name ({{ operator.operator.username }})
+              {% endif %}
+            </a>
+            {% if not forloop.last %}
+              <br/>
+            {% endif %}
+          {% endfor %}
+        {% else %}
+          No Assignments
+        {% endif %}
+      </div>
+      <div class="modal-footer detail-preview-modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

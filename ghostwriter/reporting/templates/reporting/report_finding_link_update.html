@@ -1,0 +1,55 @@
+{% extends "collab_editing/update.html" %}
+
+{% load static bleach_tags %}
+
+{% block pagetitle %}Report Finding Form{% endblock %}
+
+
+{% block content %}
+    <header class="detail-page-heading resource-detail-heading mb-4">
+        <div class="resource-form-page-heading">
+            <span class="detail-eyebrow">Report Finding</span>
+            <h1>Edit {{ object.display_title }}</h1>
+            <p>Tailor this finding for {{ object.report }}. Changes save automatically while collaboration is connected.</p>
+        </div>
+        <div class="detail-page-heading-actions">
+            <a class="btn btn-outline-primary btn-sm"
+               href="{% url 'reporting:report_detail' pk=object.report.pk %}#findings">
+                <i class="fas fa-arrow-left me-1" aria-hidden="true"></i>Back to report
+            </a>
+        </div>
+    </header>
+
+    <section class="report-finding-guidance mb-3" aria-labelledby="finding-guidance-title">
+        <button id="finding-guidance-toggle" class="report-finding-guidance-toggle" type="button"
+                data-bs-toggle="collapse" data-bs-target="#collapseGuidance" aria-expanded="false"
+                aria-controls="collapseGuidance">
+            <span class="report-finding-guidance-icon" aria-hidden="true"><i class="fas fa-compass"></i></span>
+            <span class="report-finding-guidance-copy">
+                <span class="detail-eyebrow">Library context</span>
+                <span id="finding-guidance-title" class="report-finding-guidance-title">Finding Guidance</span>
+                <span class="report-finding-guidance-description">Reference notes carried over from the finding library</span>
+            </span>
+            <i class="fas fa-chevron-down report-finding-guidance-chevron" aria-hidden="true"></i>
+        </button>
+        <div id="collapseGuidance" class="collapse" aria-labelledby="finding-guidance-toggle">
+            <div class="report-finding-guidance-body">
+                {% if reportfindinglink.finding_guidance and reportfindinglink.finding_guidance != "<p></p>" %}
+                    <div class="detail-prose rich-text-field-preview">{{ reportfindinglink.finding_guidance|bleach }}</div>
+                {% else %}
+                    <p class="report-finding-guidance-empty">No guidance was provided for this finding in the library.</p>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <div class="resource-form-shell">
+        {{ block.super }}
+    </div>
+{% endblock %}
+
+{%  block morescripts %}
+    {{ block.super }}
+    <script type="text/plain" id="graphql-evidence-upload-url">{% url 'reporting:upload_evidence' object.report.id %}</script>
+    <script type="text/plain" id="graphql-evidence-report-id">{{ object.report.id }}</script>
+{% endblock %}

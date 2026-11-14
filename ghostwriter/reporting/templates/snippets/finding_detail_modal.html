@@ -1,0 +1,37 @@
+{% load extra_fields bleach_tags %}
+
+<div id="finding_detail_{{ finding.id }}" class="modal fade detail-preview-modal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-super-sized modal-dialog-scrollable modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <span class="detail-preview-modal-eyebrow">Finding preview</span>
+          <h2 class="modal-title">{{ finding.title }}</h2>
+        </div>
+        <button type="button" class="btn-close detail-preview-modal-close" data-bs-dismiss="modal" aria-label="Close">
+        </button>
+      </div>
+      <div class="modal-body">
+
+        {% if finding.tags.all %}<div class="detail-preview-modal-tags">{% for tag in finding.tags.all %}<span class="detail-preview-modal-tag">{{ tag.name }}</span>{% endfor %}</div>{% endif %}
+
+        <h5>Description Preview</h5>
+        {% if finding.description %}
+          {{ finding.description|bleach|safe }}
+        {% else %}
+          <p>No description has been provided for this finding.</p>
+        {% endif %}
+
+        <h5 class="mt-3">Usage Guidance</h5>
+        {% if finding.finding_guidance %}
+          {{ finding.finding_guidance|bleach|safe }}
+        {% else %}
+          <p>No guidance has been provided for this finding.</p>
+        {% endif %}
+      </div>
+      <div class="modal-footer detail-preview-modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

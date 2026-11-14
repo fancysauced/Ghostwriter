@@ -1,235 +1,515 @@
-{% load custom_tags %}
+{% load static i18n compress custom_tags %}
 
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
 
-        <title>{% block title %}Ghostwriter{% endblock %}</title>
+  <title>{% block title %}Ghostwriter{% endblock %}</title>
 
-        <!-- Load Static Files -->
-        {% load static %}
-        <link rel="shortcut icon" href="{%  static 'favicon.ico' %}">
+  <!-- Load Static Files -->
+  <link rel="shortcut icon" href="{% static 'favicon.ico' %}"/>
 
-        <!-- Bootstrap CSS CDN -->
-        <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+  <!-- Bootstrap CSS -->
+  <link rel="stylesheet" href="{% static 'vendor/bootstrap/5.3.8/css/bootstrap.min.css' %}"/>
+  <link rel="stylesheet" href="{% static 'css/bootstrap5_compat.css' %}"/>
 
-        <!-- Font Awesome JS -->
-        <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.0/css/all.css" integrity="sha384-lZN37f5QGtY3VHgisS14W3ExzMWZxybE1SJSEsQp9S+oqd12jhcu+A56Ebc1zFSJ" crossorigin="anonymous">
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="{% static 'css/fontawesome/all.css' %}"/>
 
-        <!-- jQuery UI & jQuery CDN -->
-        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js"></script>
-        <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+  <!-- jQuery JS -->
+  <script src="{% static 'js/jquery-3.6.1.min.js' %}"></script>
 
-        <!-- jQuery Tablesorter Plugin -->
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery.tablesorter/2.31.1/js/jquery.tablesorter.js" crossorigin="anonymous"></script>
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery.tablesorter/2.31.1/js/jquery.tablesorter.widgets.js" crossorigin="anonymous"></script>
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery.tablesorter/2.31.3/js/parsers/parser-date-range.min.js" crossorigin="anonymous"></script>
+  <!-- Bootstrap JS bundle (includes Popper) -->
+  <script src="{% static 'vendor/bootstrap/5.3.8/js/bootstrap.bundle.min.js' %}"></script>
 
-        <!-- SortableJS for Drag n Drop -->
-        <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+  <!-- Sugar Parser -->
+  <script src="{% static 'js/sugar.min.js' %}"></script>
 
-        <!-- Toastr -->
-        <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/css/toastr.min.css">
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/js/toastr.min.js"></script>
+  <!-- jQuery Tablesorter Plugin -->
+  <script type="text/javascript" src="{% static 'js/jquery.tablesorter.js' %}"></script>
+  <script type="text/javascript" src="{% static 'js/jquery.tablesorter.widgets.js' %}"></script>
+  <script type="text/javascript" src="{% static 'js/parser-date-range.min.js' %}"></script>
+  <script type="text/javascript" src="{% static 'js/parser-date.js' %}"></script>
 
-        <!-- TinyMCE -->
-        <script src="{% static 'js/tinymce/tinymce.min.js' %}"></script>
+  <!-- SortableJS for Drag n Drop -->
+  <script src="{% static 'js/Sortable.min.js' %}"></script>
 
-        <!-- TinyMCE -->
-        <script type="application/javascript" src= "{% static 'js/tinymce/config.js' %}"></script>
+  <!-- Toastr -->
+  <link rel="stylesheet" type="text/css" href="{% static 'css/toastr.min.css' %}">
+  <script type="text/javascript" src="{% static 'js/toastr.min.js' %}"></script>
 
-        <!-- Ghostwriter JS & CSS -->
-        <script src="{% static 'js/project.js' %}"></script>
-        <link rel="stylesheet" href="{% static 'css/styles.css' %}">
-    </head>
+  <!-- Rich-text editor shortcuts -->
+  {% include "snippets/editor_shortcuts_config.html" %}
 
-    <body>
-        <div class="wrapper">
-            <!-- Page Content Holder -->
-            <div id="content">
-                <!-- Page Content Goes Here -->
-                <div>
-                    {% block content %}{% endblock %}
-                    {% block pagination %}
-                        {% if is_paginated %}
-                            <div class="pagination">
-                                <span class="page-links">
-                                    <span class="page-current">
-                                        <p>
-                                            {% if page_obj.has_previous %}
-                                                <a href="{{ request.path }}?page={{ page_obj.previous_page_number }}"></a>
-                                            {% endif %}
-                                            Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
-                                            {% if page_obj.has_next %}
-                                                <a href="{{ request.path }}?page={{ page_obj.next_page_number }}"> ></a>
-                                            {% endif %}
-                                        </p>
-                                    </span>
-                                </span>
-                            </div>
-                        {% endif %}
-                    {% endblock %}
-                </div>
-            </div>
-        </div>
+  <!-- Ghostwriter JS & CSS -->
+  <script src="{% static 'js/project.js' %}"></script>
+  <script src="{% static 'js/active-report.js' %}"></script>
+  <link rel="stylesheet" href="{% static 'css/styles.css' %}?v={{ VERSION }}-scroll1"/>
+  <link rel="stylesheet" href="{% static 'css/design_system.css' %}?v={{ VERSION }}-ui40"/>
 
-        <!-- Script for Sidebar -->
-        <script>
-            $(document).ready(function () {
-              $('#sidebarCollapse').on('click', function () {
-                $('#sidebar').toggleClass('active');
-                $(this).toggleClass('active');
-              });
-            });
-        </script>
+  <!-- Standalone Tiptap editor (packaged for offline deployments) -->
+  <script type="module" src="{% static 'assets/standalone_tiptap_loader.js' %}?v={{ VERSION }}"></script>
 
-        <!-- Script for Collapsibles -->
-        <script>
-            var coll = document.getElementsByClassName('collapsible');
-            var i;
-            for (i = 0; i < coll.length; i++) {
-              coll[i].addEventListener('click', function () {
-                this.classList.toggle('active');
-                var content = this.nextElementSibling;
-                if (content.style.maxHeight) {
-                  content.style.maxHeight = null;
-                } else {
-                  content.style.maxHeight = content.scrollHeight + 'px';
-                }
-              });
+  <!-- FullCalendar -->
+  <script src="{% static 'js/fullcalendar-main.min.js' %}"></script>
+  <script src="{% static 'js/fullcalendar-locales-all.min.js' %}"></script>
+  <link rel="stylesheet" type="text/css" href="{% static 'css/fullcalendar-main.min.css' %}">
+
+  <!-- ClipboardJS -->
+  <script src="{% static 'js/clipboard.min.js' %}"></script>
+
+  <!-- Textarea Autoresize -->
+  <script src="{% static 'js/jquery.textarea_autosize.js' %}"></script>
+
+  <script>
+  (function() {
+    try {
+      var theme = localStorage.getItem('ghostwriter-theme') || 'light';
+      if (theme === 'auto') {
+        theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      }
+      document.documentElement.setAttribute('data-theme', theme);
+      document.documentElement.setAttribute('data-bs-theme', theme);
+    } catch(e) {}
+  })();
+  </script>
+</head>
+
+<body class="has-scroll-to-top">
+<div class="wrapper">
+  <!-- Page Content Holder -->
+  <div id="content">
+    {%  comment %} Page Content Goes Here {% endcomment %}
+    <div>
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+</div>
+
+{% include "snippets/scroll_to_top.html" %}
+
+{% comment %} Scripts included on ALL pages {% endcomment %}
+<script>
+  {% comment %} Open a modal by ID {% endcomment %}
+  function openModal(modalId) {
+    // Add # prefix if not present for the selector
+    const selector = modalId.startsWith('#') ? modalId : '#' + modalId;
+    const modal = document.querySelector(selector);
+    if (modal) {
+      bootstrap.Modal.getOrCreateInstance(modal).show();
+    }
+  }
+
+  function moveFocusOutOfModal(modal) {
+    const activeElement = document.activeElement;
+
+    if (!modal || !activeElement || !modal.contains(activeElement)) {
+      return;
+    }
+
+    const bodyHadTabindex = document.body.hasAttribute('tabindex');
+    const previousBodyTabindex = document.body.getAttribute('tabindex');
+
+    activeElement.blur();
+    document.body.setAttribute('tabindex', '-1');
+    document.body.focus({preventScroll: true});
+
+    if (bodyHadTabindex) {
+      document.body.setAttribute('tabindex', previousBodyTabindex);
+    } else {
+      document.body.removeAttribute('tabindex');
+    }
+  }
+
+  document.addEventListener('click', function (event) {
+    const target = event.target;
+
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const dismissButton = target.closest('[data-bs-dismiss="modal"]');
+    const modal = dismissButton ? dismissButton.closest('.modal') : null;
+
+    if (modal) {
+      moveFocusOutOfModal(modal);
+    }
+  }, true);
+
+  $(document).on('hide.bs.modal', '.modal', function () {
+    moveFocusOutOfModal(this);
+  });
+
+  {% comment %} Handle AJAX errors {% endcomment %}
+  (function($){
+    $(document).on('ajaxError', function(event, xhr) {
+      if (xhr.status === 401 || xhr.status === 403) {
+        if (xhr.hasOwnProperty('responseJSON')) {
+          let errorData = xhr.responseJSON;
+          if (errorData['message']) {
+            displayToastTop({type:errorData['result'], string:errorData['message'], title:'Error'});
+          }
+        }
+      }
+    });
+  })(jQuery);
+
+  {% comment %} Persist the working report in browser storage across login sessions {% endcomment %}
+  GhostwriterActiveReport.init({
+    reportUrlTemplate: '{% url 'reporting:report_detail' 0 %}',
+    activationUrlTemplate: '{% url 'reporting:ajax_activate_report' 0 %}',
+  });
+
+  {% comment %} Open and close the sidebar {% endcomment %}
+
+  function sidebarOpen() {
+    $('#sidebar').toggleClass('active');
+    $('.sidebar-toggle-btn').toggleClass('fa-flip-horizontal');
+
+    {% comment %} Send AJAX POST request to update session {% endcomment %}
+    $.ajax({
+      url: '/home/ajax/session/update',
+      type: 'POST',
+      dataType: 'json',
+      data: {
+        'session_data': 'sidebar',
+      },
+    });
+  }
+
+  {% comment %} Open the sidebar {% endcomment %}
+  $('.sidebar-header-tab').click(function () {
+    sidebarOpen();
+  });
+
+  {% comment %} Activate Bootstrap hover tooltips {% endcomment %}
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (tooltip) {
+      bootstrap.Tooltip.getOrCreateInstance(tooltip, {boundary: document.body});
+    });
+  });
+
+  {% comment %} All of the Toastr JavaScript {% endcomment %}
+  $(document).ready(function () {
+    toastr.options = {
+      'closeButton': true,
+      'debug': false,
+      'newestOnTop': false,
+      'progressBar': true,
+      'positionClass': 'toast-top-right',
+      'preventDuplicates': false,
+      'showDuration': '1000',
+      'hideDuration': '1000',
+      'timeOut': '4000',
+      'extendedTimeOut': '4000',
+      'showEasing': 'swing',
+      'hideEasing': 'linear',
+      'showMethod': 'fadeIn',
+      'hideMethod': 'fadeOut',
+    }
+    // Need to set this outside of the dict per the README
+    // https://github.com/CodeSeven/toastr#escape-html-characters
+    toastr.options.escapeHtml = true;
+  });
+
+  {% comment %} Display toast notification for each message on page load {% endcomment %}
+  {% for message in messages %}
+    {% if 'no-toast' not in message.tags %}
+      {% if message.level == DEFAULT_MESSAGE_LEVELS.SUCCESS %}
+        displayToastTop({type: 'success', string: '{{ message|escapejs }}'});
+      {% elif message.level == DEFAULT_MESSAGE_LEVELS.WARNING %}
+        displayToastTop({type: 'warning', string: '{{ message|escapejs }}'});
+      {% elif message.level == DEFAULT_MESSAGE_LEVELS.ERROR %}
+        displayToastTop({type: 'error', string: '{{ message|escapejs }}'});
+      {% elif message.level == DEFAULT_MESSAGE_LEVELS.INFO %}
+        displayToastTop({type: 'info', string: '{{ message|escapejs }}'});
+      {% elif message.level == DEFAULT_MESSAGE_LEVELS.DEBUG %}
+        displayToastTop({type: 'info', string: '{{ message|escapejs }}'});
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+
+  // Handle library-filter accordion clicks
+  $(document).ready(function() {
+    // Listen for clicks on library-filter accordions or their toggle controls
+    $(document).on('click', '.library-filter, [data-bs-target*=".library-filter"], [href*=".library-filter"]', function(e) {
+      // Get the accordion ID if available
+      let accordionId = $(this).attr('id') ||
+                        $(this).attr('data-bs-target') ||
+                        $(this).attr('href') ||
+                        'unknown';
+
+      // If this is just an ID string, clean it up
+      if (typeof accordionId === 'string') {
+        accordionId = accordionId.replace(/^[#.]/, '');
+      }
+
+      $.ajax({
+        url: '/home/ajax/session/update',
+        type: 'POST',
+        dataType: 'json',
+        data: {
+          'session_data': 'filter',
+        },
+        success: function(response) {
+          if (response && response.message) {
+            console.log('Library filter state updated:', response.message);
+          }
+        }
+      });
+    });
+  });
+
+  {% if request.user.is_authenticated %}
+    {% comment %} Configure WebSockets protocol – HTTP for dev and HTTPS for prod {% endcomment %}
+    let ws_proto = 'ws://'
+    if (location.protocol === 'https:') {
+      ws_proto = 'wss://'
+    }
+    const protocol = ws_proto
+    const username = '{{ request.user.get_clean_username|escapejs }}';
+
+    {% comment %} Connect to channel for individual notifications {% endcomment %}
+    const ws_user = new WebSocket(
+      protocol + window.location.host +
+      '/ws/users/' + username + '/');
+
+    {% comment %} Connect to channel for all user notifications {% endcomment %}
+    const ws_all = new WebSocket(
+      protocol + window.location.host +
+      '/ws/users/all/');
+
+    {% comment %} Functions for sending messages {% endcomment %}
+    function sendMessage(socket, msg) {
+      {% comment %} Wait until the state of the socket is not ready and send the message when it is... {% endcomment %}
+      waitForSocketConnection(socket, function () {
+        socket.send(msg);
+      });
+    }
+
+    {% comment %} Make the function wait until the connection is made... {% endcomment %}
+    function waitForSocketConnection(socket, callback) {
+      setTimeout(
+        function () {
+          if (socket.readyState === 1) {
+            if (callback != null) {
+              callback();
             }
-        </script>
+          } else {
+            console.log('Waiting for connection...')
+            waitForSocketConnection(socket, callback);
+          }
+        }, 5); // wait 5 millisecond for the connection...
+    }
 
-        <!-- Script for Bootstrap Hover Tooltip -->
-        <script>
-            $(document).ready(function () {
-              $('[data-toggle="tooltip"]').tooltip();
-            });
-        </script>
+    {% comment %} Handle receiving messages on channels {% endcomment %}
+    ws_user.onmessage = function (e) {
+      let data = JSON.parse(e.data);
+      displayToastTop({type: data.message.level, string: data.message.message, title: data.message.title});
+    }
+    ws_all.onmessage = function (e) {
+      let data = JSON.parse(e.data);
+      displayToastTop({type: data.message.level, string: data.message.message, title: data.message.title});
+    };
 
-        <!-- Script to Opening Accordions on Link -->
-        <script>
-            // Modification of https://gist.github.com/raddevon/8958486
-            function openAnchorAccordion() {
-              if (window.location.hash) {
-                var jQuerytarget = jQuery('body').find(window.location.hash);
-                // console.log( jQuerytarget );
-                if (jQuerytarget.hasClass('collapse')) {
-                  var jQuerytargetAccordion = jQuerytarget.find('.collapse');
-                  // console.log( jQuerytargetAccordion );
-                  jQuerytarget.collapse('show');
-                }
-              }
-            }
+    {% comment %} Handle unexpected WebSocket closures {% endcomment %}
+    ws_user.onclose = function () {
+      console.error('User notification WebSocket closed unexpectedly');
+    };
+    ws_all.onclose = function () {
+      console.error('Global notification WebSocket closed unexpectedly');
+    };
+  {% endif %}
 
-            openAnchorAccordion();
+  // Theme Toggle Functionality
+  (function() {
+    const THEME_STORAGE_KEY = 'ghostwriter-theme';
+    const themeToggleSwitch = document.getElementById('theme-toggle-switch');
+    const themeAutoCheckbox = document.getElementById('theme-auto-checkbox');
 
-            jQuery('body').on('click', 'a', openAnchorAccordion);
-        </script>
+    function getSystemTheme() {
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+      }
+      return 'light';
+    }
 
-        <!-- Initialize Config for Toastr Toasts -->
-        <script>
-            // Default Configuration
-            $(document).ready(function () {
-              toastr.options = {
-                'closeButton': true,
-                'debug': false,
-                'newestOnTop': false,
-                'progressBar': true,
-                'positionClass': 'toast-top-right',
-                'preventDuplicates': false,
-                'showDuration': '1000',
-                'hideDuration': '1000',
-                'timeOut': '4000',
-                'extendedTimeOut': '4000',
-                'showEasing': 'swing',
-                'hideEasing': 'linear',
-                'showMethod': 'fadeIn',
-                'hideMethod': 'fadeOut',
-              }
-              // Need to set this outside of the dict per the README
-              // https://github.com/CodeSeven/toastr#escape-html-characters
-              toastr.options.escapeHtml = true;
-            });
+    function applyTheme(theme) {
+      let actualTheme = theme;
+      if (theme === 'auto') {
+        actualTheme = getSystemTheme();
+      }
+      document.documentElement.setAttribute('data-theme', actualTheme);
+      document.documentElement.setAttribute('data-bs-theme', actualTheme);
+      if (themeToggleSwitch) {
+        if (theme === 'auto') {
+          themeToggleSwitch.checked = actualTheme === 'dark';
+        } else {
+          themeToggleSwitch.checked = theme === 'dark';
+        }
+      }
+    }
 
-            // Display toast notification for each message on page load
-            {% for message in messages %}
-                {% if message.level == DEFAULT_MESSAGE_LEVELS.SUCCESS %}
-                    displayToastTop({type:'success', string:'{{ message }}'});
-                {% elif message.level == DEFAULT_MESSAGE_LEVELS.WARNING %}
-                    displayToastTop({type:'warning', string:'{{ message }}'});
-                {% elif message.level == DEFAULT_MESSAGE_LEVELS.ERROR %}
-                    displayToastTop({type:'error', string:'{{ message }}'});
-                {% elif message.level == DEFAULT_MESSAGE_LEVELS.INFO %}
-                    displayToastTop({type:'info', string:'{{ message }}'});
-                {% elif message.level == DEFAULT_MESSAGE_LEVELS.DEBUG %}
-                    displayToastTop({type:'info', string:'{{ message }}'});
-                {% endif %}
-            {% endfor %}
-        </script>
+    function getCurrentTheme() {
+      return localStorage.getItem(THEME_STORAGE_KEY) || 'light';
+    }
 
-        {% if user.is_authenticated %}
-            <!-- Script for WebSockets Group for Authenticated Users -->
-            <script>
-                // Connect to channel for individual notifcations
-                var username = '{{ user }}';
-                var ws_user = new WebSocket(
-                  'ws://' + window.location.host +
-                  '/ws/users/' + username + '/');
-                // Connect to channel for all user notifications
-                var ws_all = new WebSocket(
-                  'ws://' + window.location.host +
-                  '/ws/users/all/');
+    function saveAndApplyTheme(theme) {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+      applyTheme(theme);
+    }
 
-                // Functions for sending messages
-                function sendMessage(socket, msg) {
-                  // Wait until the state of the socket is not ready and send the message when it is...
-                  waitForSocketConnection(socket, function () {
-                    socket.send(msg);
-                  });
-                }
-                // Make the function wait until the connection is made...
-                function waitForSocketConnection(socket, callback) {
-                  setTimeout(
-                    function () {
-                      if (socket.readyState === 1) {
-                        if (callback != null) {
-                          callback();
-                        }
-                      } else {
-                        console.log('Waiting for connection...')
-                        waitForSocketConnection(socket, callback);
-                      }
-                    }, 5); // wait 5 milisecond for the connection...
-                }
+    const savedTheme = getCurrentTheme();
+    if (themeAutoCheckbox) {
+      themeAutoCheckbox.checked = savedTheme === 'auto';
+    }
+    applyTheme(savedTheme);
 
-                // Handle receiving messages on channels
-                ws_user.onmessage = function (e) {
-                  var data = JSON.parse(e.data);
-                  if (data.assignments !== undefined) {
-                    document.getElementById('assignment-count').innerHTML = data.assignments
-                  }
-                  displayToastTop({type:data.message['level'], string:data.message['message'], title:data.message['title']});
-                }
-                ws_all.onmessage = function (e) {
-                  var data = JSON.parse(e.data);
-                  displayToastTop({type:data.message['level'], string:data.message['message'], title:data.message['title']});
-                };
+    if (themeToggleSwitch) {
+      themeToggleSwitch.addEventListener('change', function() {
+        if (themeAutoCheckbox && themeAutoCheckbox.checked) {
+          themeAutoCheckbox.checked = false;
+        }
+        const selectedTheme = this.checked ? 'dark' : 'light';
+        saveAndApplyTheme(selectedTheme);
+      });
+    }
 
-                // Handle unexpected WebSocket closures
-                ws_user.onclose = function (e) {
-                  console.error('User notfication WebSocket closed unexpectedly');
-                };
-                ws_all.onclose = function (e) {
-                  console.error('Global notification WebSocket closed unexpectedly');
-                };
-            </script>
-        {% endif %}
+    if (themeAutoCheckbox) {
+      themeAutoCheckbox.addEventListener('change', function() {
+        if (this.checked) {
+          saveAndApplyTheme('auto');
+        } else {
+          const manualTheme = themeToggleSwitch && themeToggleSwitch.checked ? 'dark' : 'light';
+          saveAndApplyTheme(manualTheme);
+        }
+      });
+    }
 
-        {% block morescripts %}{% endblock %}
-    </body>
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
+        const currentTheme = getCurrentTheme();
+        if (currentTheme === 'auto') {
+          applyTheme('auto');
+        }
+      });
+    }
+  })();
+</script>
+
+{% comment %} Blocks used by forms that use Bootstrap tabs {% endcomment %}
+{% block tabs %}
+  <script>
+    $(function () {
+      function getTabLink(hash) {
+        return $('ul.nav a[data-tab-hash="' + hash + '"], ul.nav a[href="' + hash + '"]').first();
+      }
+
+      let hash = window.location.hash.replace(/[^\w-#]/g, '');
+      let tabLink = hash ? getTabLink(hash) : $();
+      if (tabLink.length) {
+        tabLink.tab('show');
+      }
+
+      $('.nav-tabs a').click(function (e) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        $(this).tab('show');
+
+        const tabHash = $(this).data('tab-hash') || $(this).attr('href');
+        if (tabHash && window.location.hash !== tabHash) {
+          window.history.pushState(null, '', tabHash);
+        }
+      });
+    });
+  </script>
+{% endblock %}
+
+{% block tabforms %}
+  {% comment %} Handle the Delete and Undo buttons {% endcomment %}
+  <script>
+    $(document).on('click', '.formset-del-button', function () {
+      // Get the parent divs for this formset instance
+      let parent_div = $(this).closest('div.formset-container');
+      let formset_instance = parent_div.find('div.formset');
+      // Find the parent formset's Bootstrap alert div
+      let alert = parent_div.find('div.alert');
+      // Find the hidden DELETE checkbox and check it
+      let del_checkbox = formset_instance.find(":input[id*='DELETE']");
+      console.log(del_checkbox);
+      del_checkbox.eq(0).prop('checked', true);
+      console.log(del_checkbox.eq(0).prop('checked'));
+      // Hide the formset instance and display the alert
+      formset_instance.hide();
+      $(alert).show();
+    });
+
+    $(document).on('click', '.formset-undo-button', function () {
+      // Get the parent divs for the formset instance
+      let parent_div = $(this).closest('div.formset-container');
+      let formset_instance = parent_div.find('div.formset');
+      // Find the hidden DELETE checkbox and uncheck it
+      let del_checkbox = formset_instance.find(":input[id*='DELETE']");
+      console.log(del_checkbox);
+      del_checkbox.eq(0).prop('checked', false);
+      console.log(del_checkbox.eq(0).prop('checked'));
+      // Show the formset instance and hide the alert
+      formset_instance.show();
+      $(this).hide();
+    });
+  </script>
+
+  {% comment %} Switch to Tab with Invalid Inputs {% endcomment %}
+  <script>
+    // Open tab with the first invalid/missing field on submission but before POST
+    $('[id^="submit-id-"]').click(function () {
+      $(':input:invalid').each(function () {
+        // Find the tab-pane that this element is inside, and get the id
+        let $closest = $(this).closest('.tab-pane');
+        let id = $closest.attr('id');
+
+        // Find the link that corresponds to the pane and have it show
+        $('.nav a[data-bs-target="#' + id + '"], .nav a[href="#' + id + '"]').first().tab('show');
+
+        // Only want to do it once
+        return false;
+      });
+    });
+    // Open tab with the first invalid/missing field when returning from a POST that failed validation
+    $(window).on('load', function () {
+      $('input.is-invalid').each(function () {
+        // Find the tab-pane that this element is inside, and get the id
+        let $closest = $(this).closest('.tab-pane');
+        let id = $closest.attr('id');
+
+        // Find the link that corresponds to the pane and have it show
+        $('.nav a[data-bs-target="#' + id + '"], .nav a[href="#' + id + '"]').first().tab('show');
+
+        // Only want to do it once
+        return false;
+      });
+      // If no invalid fields, look for invalid-feedback messages
+      // This catches invalid fields enhanced by a rich-text editor
+      $('span.invalid-feedback').each(function () {
+        // Find the tab-pane that this element is inside, and get the id
+        let $closest = $(this).closest('.tab-pane');
+        let id = $closest.attr('id');
+
+        // Find the link that corresponds to the pane and have it show
+        $('.nav a[data-bs-target="#' + id + '"], .nav a[href="#' + id + '"]').first().tab('show');
+
+        // Only want to do it once
+        return false;
+      });
+    });
+
+  </script>
+{% endblock %}
+
+{% comment %} Block to hold additional one-off JavaScript needed by an individual template {% endcomment %}
+{% block morescripts %}{% endblock %}
+</body>
 </html>

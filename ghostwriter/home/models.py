@@ -1,4 +1,4 @@
-"""This contains all of the database models for the Home application."""
+"""This contains all the database models for the Home application."""
 
 # Standard Libraries
 import os
@@ -6,14 +6,11 @@ import os
 # Django Imports
 from django.conf import settings
 from django.db import models
-from django.templatetags.static import static
 
 
 # Create your models here.
 class UserProfile(models.Model):
-    """
-    Stores an individual user profile form, related to :model:`users.User`.
-    """
+    """Stores an individual user profile form, related to :model:`users.User`."""
 
     def set_upload_destination(self, filename):
         """
@@ -24,6 +21,7 @@ class UserProfile(models.Model):
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     avatar = models.ImageField(upload_to=set_upload_destination, default=None, blank=True)
+    hide_quickstart = models.BooleanField(default=False)
 
     class Meta:
 
@@ -31,12 +29,20 @@ class UserProfile(models.Model):
         verbose_name = "User profile"
         verbose_name_plural = "User profiles"
 
-    @property
-    def avatar_url(self):
-        try:
-            # Only return the image URL if the file is present
-            if os.path.exists(self.avatar.path):
-                return self.avatar.url
-            return static("images/default_avatar.png")
-        except ValueError:
-            return static("images/default_avatar.png")
+
+class DashboardExceptionDismissal(models.Model):
+    """Record a cleared dashboard alert without deleting its task history."""
+
+    task_id = models.CharField(max_length=32, unique=True)
+    dismissed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="cleared_dashboard_exceptions",
+    )
+    dismissed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-dismissed_at"]
+        verbose_name = "dashboard exception dismissal"
+        verbose_name_plural = "dashboard exception dismissals"

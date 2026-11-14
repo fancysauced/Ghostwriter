@@ -1,64 +1,142 @@
-name: Build and Run Unit Test Workflow
+name: Run Unit Tests
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - master
+    paths-ignore:
+      - "**.md"
+      - "**.mdx"
+      - "**.html"
+      - "**.css"
+      - "DOCS/**"
   pull_request:
     branches:
       - master
+    paths-ignore:
+      - "**.md"
+      - "**.mdx"
+      - "**.html"
+      - "**.css"
+      - "DOCS/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unit-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  check-collab-graphql-auth:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: javascript/package-lock.json
+
+      - name: Install JavaScript dependencies
+        working-directory: javascript
+        run: npm ci
+
+      - name: Run collaboration GraphQL authorization regression test
+        working-directory: javascript
+        run: npm run test:collab-graphql-auth
+
   run-unit-tests:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source code
-        uses: actions/checkout@v2
-
-      - name: Build environment
-        run: |
-          shopt -s dotglob
-          mkdir .envs && cp -r .envs_template/* .envs/
-          docker-compose -f local.yml build
-          docker-compose -f local.yml up -d
-
-      - name: Bring up environment
-        run: |
-          docker-compose -f local.yml up -d
-
-      - name: Wait 60 seconds for database migrations
-        uses: jakejarvis/wait-action@master
+        uses: actions/checkout@v6
         with:
-          time: '60s'
+          persist-credentials: false
 
-      - name: Test seeding database
-        run: docker-compose -f local.yml run --rm django /seed_data
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Generate Coverage report
+      - name: Build Django test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./compose/local/django/Dockerfile
+          load: true
+          tags: ghostwriter_ci_django:latest
+          cache-from: type=gha,scope=local-django
+          cache-to: type=gha,mode=max,scope=local-django
+
+      - name: Start test dependencies
+        run: docker compose -f ci.yml up -d --wait --wait-timeout 120 postgres redis
+
+      - name: Generate coverage report
         run: |
-          docker-compose -f local.yml run django coverage run manage.py test
-          docker-compose -f local.yml run django coverage xml -o "coverage/reports/coverage.xml"
+          mkdir -p coverage/reports
+          docker compose -f ci.yml run --rm django coverage run manage.py test --exclude-tag=GitHub
+          docker compose -f ci.yml run --rm django coverage xml -o coverage/reports/coverage.xml
 
-      - name: Upload Coverage report artifact
-        uses: actions/upload-artifact@v2
+      - name: Get dependency logs
+        if: failure()
+        run: |
+          docker compose -f ci.yml logs postgres > postgres-logs.txt
+          docker compose -f ci.yml logs redis > redis-logs.txt
+
+      - name: Upload dependency logs artifact
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-service-logs
+          path: |
+            postgres-logs.txt
+            redis-logs.txt
+
+      - name: Upload coverage report artifact
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage/reports/coverage.xml
 
   upload-coverage-report:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     needs: run-unit-tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out source code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v2
+      - name: Download coverage report artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-report
+          path: coverage/reports
+
+      - name: Check Codecov token availability
+        id: codecov
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          if [[ -n "$CODECOV_TOKEN" ]]; then
+            echo "token_available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "token_available=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload coverage report to Codecov
-        uses: codecov/codecov-action@v2
+        if: steps.codecov.outputs.token_available == 'true'
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/reports/coverage.xml
+          disable_search: true
           name: codecov-ghostwriter
           fail_ci_if_error: true
           verbose: true

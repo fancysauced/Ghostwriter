@@ -1,0 +1,25 @@
+{% comment %}
+Evidence Lightbox Modal
+Displays evidence files at full size in a modal overlay.
+Supports both images and text files.
+{% endcomment %}
+
+<div id="evidence-lightbox-modal" class="modal fade detail-preview-modal evidence-lightbox-modal" tabindex="-1" role="dialog" aria-labelledby="evidence-lightbox-title" aria-hidden="true" data-bs-backdrop="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered" role="document" aria-labelledby="evidence-lightbox-title">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="evidence-lightbox-title"></h5>
+        <button type="button" class="btn-close detail-preview-modal-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body evidence-lightbox-body">
+        <img id="evidence-lightbox-image" src="" alt="Evidence preview" class="img-fluid evidence-lightbox-media">
+        <div id="evidence-lightbox-text" class="evidence-lightbox-text">
+          <pre class="mb-0"></pre>
+        </div>
+      </div>
+      <div class="modal-footer detail-preview-modal-footer evidence-lightbox-footer">
+        <a id="evidence-lightbox-download" href="" class="btn btn-outline-secondary icon download-icon" download>Download</a>
+      </div>
+    </div>
+  </div>
+</div>

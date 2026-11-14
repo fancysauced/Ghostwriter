@@ -1,4 +1,5 @@
 # Standard Libraries
+from binascii import hexlify
 import logging
 
 # Django Imports
@@ -51,3 +52,15 @@ class UserModelTests(TestCase):
     def test_get_full_name_property(self):
         user = UserFactory(name="Christopher Maddalena", username="cmaddalena")
         self.assertEqual(user.get_full_name(), "Christopher Maddalena")
+
+    def test_get_clean_username_property(self):
+        cleaned = hexlify("benny@ghostwriter.wiki".encode()).decode()
+        user = UserFactory(username="benny@ghostwriter.wiki")
+        self.assertEqual(user.get_clean_username(), cleaned)
+
+    def test_report_template_management_capability(self):
+        user = UserFactory(enable_template_management=True)
+
+        self.assertEqual(user.role, "user")
+        self.assertFalse(user.is_privileged)
+        self.assertTrue(user.can_manage_report_templates)

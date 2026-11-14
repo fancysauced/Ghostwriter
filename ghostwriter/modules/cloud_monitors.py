@@ -3,22 +3,22 @@
 # Standard Libraries
 import logging
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 # 3rd Party Libraries
 import boto3
-import pytz
 import requests
-from botocore.exceptions import ClientError
+from botocore.config import Config
+from botocore.exceptions import ClientError, ConnectTimeoutError
 
 # Using __name__ resolves to ghostwriter.modules.cloud_monitors
 logger = logging.getLogger(__name__)
 
 # Set timezone for dates to UTC
-utc = pytz.UTC
+utc = timezone.utc
 
 # Digital Ocean API endpoint for droplets
-DIGITAL_OCEAN_ENDPOINT = "https://api.digitalocean.com/v2/droplets"
+digital_ocean_endpoint = "https://api.digitalocean.com/v2/droplets"
 
 
 class BearerAuth(requests.auth.AuthBase):
@@ -29,6 +29,7 @@ class BearerAuth(requests.auth.AuthBase):
     token = None
 
     def __init__(self, token):
+        super().__init__()
         self.token = token
 
     def __call__(self, r):
@@ -38,7 +39,7 @@ class BearerAuth(requests.auth.AuthBase):
 
 def months_between(date1, date2):
     """
-    Compare two dates and return the number of months beetween them.
+    Compare two dates and return the number of months between them.
 
     **Parameters**
 
@@ -73,7 +74,7 @@ def test_aws(aws_key, aws_secret):
     ``aws_secret``
         AWS secret for the key
     """
-    message = ""
+    messages = []
     try:
         aws_sts = boto3.client(
             "sts",
@@ -81,19 +82,14 @@ def test_aws(aws_key, aws_secret):
             aws_secret_access_key=aws_secret,
         )
         aws_sts.get_caller_identity()
-        return {"capable": True, "message": message}
+        return {"capable": True, "message": messages}
     except ClientError:
-        logger.error(
-            "AWS could not validate the provided credentials with STS; check your AWS policies"
-        )
-        message = "AWS could not validate the provided credentials for EC2; check your attached AWS policies"
+        logger.error("AWS could not validate the provided credentials with STS; check your AWS policies")
+        messages.append("AWS could not validate the provided credentials for EC2; check your attached AWS policies")
     except Exception:
-        trace = traceback.format_exc()
         logger.exception("Testing authentication to AWS failed")
-        message = "Testing authentication to AWS failed: {traceback}".format(
-            traceback=trace
-        )
-    return {"capable": False, "message": message}
+        messages.append(f"Testing authentication to AWS failed: {traceback.format_exc()}")
+    return {"capable": False, "message": messages}
 
 
 def fetch_aws_ec2(aws_key, aws_secret, ignore_tags=None, only_running=False):
@@ -111,20 +107,26 @@ def fetch_aws_ec2(aws_key, aws_secret, ignore_tags=None, only_running=False):
     ``aws_secret``
         AWS secret for the key
     """
-    message = ""
+    messages = []
     instances = []
     if ignore_tags is None:
         ignore_tags = []
     try:
+        ec2_config = Config(
+            retries={
+                "max_attempts": 1,
+                "mode": "standard",
+            },
+            connect_timeout=30,
+        )
         client = boto3.client(
             "ec2",
             region_name="us-west-2",
             aws_access_key_id=aws_key,
             aws_secret_access_key=aws_secret,
+            config=ec2_config,
         )
-        regions = [
-            region["RegionName"] for region in client.describe_regions()["Regions"]
-        ]
+        regions = [region["RegionName"] for region in client.describe_regions()["Regions"]]
         # Loop over the regions to check each one for EC2 instances
         for region in regions:
             logger.info("Checking AWS region %s for EC2", region)
@@ -134,6 +136,7 @@ def fetch_aws_ec2(aws_key, aws_secret, ignore_tags=None, only_running=False):
                 region_name=region,
                 aws_access_key_id=aws_key,
                 aws_secret_access_key=aws_secret,
+                config=ec2_config,
             )
             # Get all EC2 instances that are running
             if only_running:
@@ -143,60 +146,66 @@ def fetch_aws_ec2(aws_key, aws_secret, ignore_tags=None, only_running=False):
             else:
                 running_instances = ec2.instances.all()
             # Loop over running instances to generate info dict
-            for instance in running_instances:
-                # Calculate how long the instance has been running in UTC
-                time_up = months_between(
-                    instance.launch_time.replace(tzinfo=utc),
-                    datetime.today().replace(tzinfo=utc),
-                )
-                tags = []
-                name = "Blank"
-                ignore = False
-                if instance.tags:
-                    for tag in instance.tags:
-                        # AWS assigns names to instances via a ``Name`` key
-                        if tag["Key"] == "Name":
-                            name = tag["Value"]
-                        else:
-                            tags.append("{}: {}".format(tag["Key"], tag["Value"]))
-                        # Check for "ignore tags"
-                        if tag["Key"] in ignore_tags or tag["Value"] in ignore_tags:
-                            ignore = True
-                pub_addresses = []
-                pub_addresses.append(instance.public_ip_address)
-                priv_addresses = []
-                priv_addresses.append(instance.private_ip_address)
-                # Add instance info to a dictionary
-                instances.append(
-                    {
-                        "id": instance.id,
-                        "provider": "Amazon Web Services {}".format(region),
-                        "service": "EC2",
-                        "name": name,
-                        "type": instance.instance_type,
-                        "monthly_cost": None,  # AWS cost is different and not easily calculated
-                        "cost_to_date": None,  # AWS cost is different and not easily calculated
-                        "state": instance.state["Name"],
-                        "private_ip": priv_addresses,
-                        "public_ip": pub_addresses,
-                        "launch_time": instance.launch_time.replace(tzinfo=utc),
-                        "time_up": "{} months".format(time_up),
-                        "tags": ", ".join(tags),
-                        "ignore": ignore,
-                    }
+            try:
+                for instance in running_instances:
+                    # Calculate how long the instance has been running in UTC
+                    time_up = months_between(
+                        instance.launch_time.replace(tzinfo=utc),
+                        datetime.today().replace(tzinfo=utc),
+                    )
+                    tags = []
+                    name = "Blank"
+                    ignore = False
+                    if instance.tags:
+                        for tag in instance.tags:
+                            # AWS assigns names to instances via a ``Name`` key
+                            if tag["Key"] == "Name":
+                                name = tag["Value"]
+                            else:
+                                tags.append("{}: {}".format(tag["Key"], tag["Value"]))
+                            # Check for "ignore tags"
+                            if tag["Key"] in ignore_tags or tag["Value"] in ignore_tags:
+                                ignore = True
+                    pub_addresses = []
+                    if instance.public_ip_address:
+                        pub_addresses.append(instance.public_ip_address)
+                    priv_addresses = []
+                    if instance.private_ip_address:
+                        priv_addresses.append(instance.private_ip_address)
+                    # Add instance info to a dictionary
+                    instances.append(
+                        {
+                            "id": instance.id,
+                            "provider": "Amazon Web Services {}".format(region),
+                            "service": "EC2",
+                            "name": name,
+                            "type": instance.instance_type,
+                            "monthly_cost": None,  # AWS cost is different and not easily calculated
+                            "cost_to_date": None,  # AWS cost is different and not easily calculated
+                            "state": instance.state["Name"],
+                            "private_ip": priv_addresses,
+                            "public_ip": pub_addresses,
+                            "launch_time": instance.launch_time.replace(tzinfo=utc),
+                            "time_up": "{} months".format(time_up),
+                            "tags": ", ".join(tags),
+                            "ignore": ignore,
+                        }
+                    )
+            except ConnectTimeoutError:
+                logger.exception("AWS timed out while trying to describe instances in %s", region)
+                messages.append(
+                    f"AWS timed out while trying to describe instances in {region}: {traceback.format_exc()}"
                 )
     except ClientError:
-        logger.error(
-            "AWS denied access to EC2 for the supplied keys; check your AWS policies"
-        )
-        message = "AWS denied access to EC2 for the supplied keys; check your attached AWS policies"
+        logger.error("AWS denied access to EC2 for the supplied keys; check your AWS policies")
+        messages.append("AWS denied access to EC2 for the supplied keys; check your attached AWS policies")
+    except ConnectTimeoutError:
+        logger.exception("AWS timed out while connecting to EC2 region")
+        messages.append(f"AWS timed out while connecting to EC2 region: {traceback.format_exc()}")
     except Exception:
-        trace = traceback.format_exc()
         logger.exception("Encountered an unexpected error with AWS EC2")
-        message = "Encountered an unexpected error with AWS EC2: {traceback}".format(
-            traceback=trace
-        )
-    return {"instances": instances, "message": message}
+        messages.append(f"Encountered an unexpected error with AWS EC2: {traceback.format_exc()}")
+    return {"instances": instances, "message": messages}
 
 
 def fetch_aws_lightsail(aws_key, aws_secret, ignore_tags=None):
@@ -226,9 +235,7 @@ def fetch_aws_lightsail(aws_key, aws_secret, ignore_tags=None):
             aws_access_key_id=aws_key,
             aws_secret_access_key=aws_secret,
         )
-        regions = [
-            region["name"] for region in default_lightsail.get_regions()["regions"]
-        ]
+        regions = [region["name"] for region in default_lightsail.get_regions()["regions"]]
 
         for region in regions:
             logger.info("Checking AWS region %s for Lightsail", region)
@@ -261,10 +268,8 @@ def fetch_aws_lightsail(aws_key, aws_secret, ignore_tags=None):
                         # Check for "ignore tags"
                         if tag["Key"] in ignore_tags or tag["Value"] in ignore_tags:
                             ignore = True
-                pub_addresses = []
-                pub_addresses.append(instance["publicIpAddress"])
-                priv_addresses = []
-                priv_addresses.append(instance["privateIpAddress"])
+                pub_addresses = [instance["publicIpAddress"]]
+                priv_addresses = [instance["privateIpAddress"]]
                 # Add instance info to a dictionary
                 instances.append(
                     {
@@ -285,18 +290,11 @@ def fetch_aws_lightsail(aws_key, aws_secret, ignore_tags=None):
                     }
                 )
     except ClientError:
-        logger.error(
-            "AWS denied access to Lightsail for the supplied keys; check your AWS policies"
-        )
+        logger.error("AWS denied access to Lightsail for the supplied keys; check your AWS policies")
         message = "AWS denied access to Lightsail for the supplied keys; check your attached AWS policies"
     except Exception:
-        trace = traceback.format_exc()
         logger.exception("Encountered an unexpected error with AWS Lightsail")
-        message = (
-            "Encountered an unexpected error with AWS Lightsail: {traceback}".format(
-                traceback=trace
-            )
-        )
+        message = f"Encountered an unexpected error with AWS Lightsail: {traceback.format_exc()}"
     return {"instances": instances, "message": message}
 
 
@@ -315,8 +313,6 @@ def fetch_aws_s3(aws_key, aws_secret, ignore_tags=None):
     """
     message = ""
     buckets = []
-    if ignore_tags is None:
-        ignore_tags = []
     try:
         logger.info("Collecting bucket resources from AWS S3")
         # Create an S3 client
@@ -355,20 +351,15 @@ def fetch_aws_s3(aws_key, aws_secret, ignore_tags=None):
                 }
             )
     except ClientError:
-        logger.error(
-            "AWS denied access to S3 for the supplied keys; check your AWS policies"
-        )
+        logger.error("AWS denied access to S3 for the supplied keys; check your AWS policies")
         message = "AWS denied access to S3 for the supplied keys; check your attached AWS policies"
     except Exception:
-        trace = traceback.format_exc()
         logger.exception("Encountered an unexpected error with AWS S3")
-        message = "Encountered an unexpected error with AWS S3: {traceback}".format(
-            traceback=trace
-        )
+        message = f"Encountered an unexpected error with AWS S3: {traceback.format_exc()}"
     return {"buckets": buckets, "message": message}
 
 
-def fetch_digital_ocean(api_key, ignore_tags=None):
+def fetch_digital_ocean(api_key, ignore_tags=None, do_only_running=False):
     """
     Authenticate to Digital Ocean and fetch all droplets.
 
@@ -390,16 +381,19 @@ def fetch_digital_ocean(api_key, ignore_tags=None):
     headers = {"Content-Type": "application/json"}
     try:
         active_droplets = requests.get(
-            DIGITAL_OCEAN_ENDPOINT,
+            digital_ocean_endpoint,
             headers=headers,
             auth=BearerAuth(api_key),
         )
         if active_droplets.status_code == 200:
             capable = True
             active_droplets = active_droplets.json()
-            logger.info(
-                "Digital Ocean credentials are functional, beginning droplet review"
-            )
+            logger.info("Digital Ocean credentials are functional, beginning droplet review")
+
+            if do_only_running:
+                active_droplets["droplets"] = [
+                    droplet for droplet in active_droplets["droplets"] if droplet["status"] == "active"
+                ]
         else:
             logger.info(
                 "Digital Ocean denied access with HTTP code %s and this message: %s",
@@ -413,24 +407,15 @@ def fetch_digital_ocean(api_key, ignore_tags=None):
                     api_response = error_message["message"]
             except ValueError:
                 api_response = active_droplets.text
-            message = (
-                f"Digital Ocean API request failed with this response: {api_response}"
-            )
+            message = f"Digital Ocean API request failed with this response: {api_response}"
     # Catch a JSON decoding error with the response
     except ValueError:
         logger.exception("Could not decode the response from Digital Ocean")
-        message = (
-            f"Could not decode this response from Digital Ocean: {active_droplets.text}"
-        )
+        message = f"Could not decode this response from Digital Ocean: {active_droplets.text}"
     # Catch any other errors related to the web request
     except Exception:
-        trace = traceback.format_exc()
         logger.exception("Encountered an unexpected error with Digital Ocean")
-        message = (
-            "Encountered an unexpected error with Digital Ocean: {traceback}".format(
-                traceback=trace
-            )
-        )
+        message = f"Encountered an unexpected error with Digital Ocean: {traceback.format_exc()}"
 
     # Loop over the droplets to generate the info dict
     if capable and "droplets" in active_droplets:
@@ -460,9 +445,7 @@ def fetch_digital_ocean(api_key, ignore_tags=None):
                     pub_addresses.append(address["ip_address"])
             # Calculate how long the instance has been running in UTC and cost to date
             time_up = months_between(
-                datetime.strptime(
-                    droplet["created_at"].split("T")[0], "%Y-%m-%d"
-                ).replace(tzinfo=utc),
+                datetime.strptime(droplet["created_at"].split("T")[0], "%Y-%m-%d").replace(tzinfo=utc),
                 datetime.today().replace(tzinfo=utc),
             )
             cost_to_date = (
@@ -483,17 +466,15 @@ def fetch_digital_ocean(api_key, ignore_tags=None):
                     "provider": "Digital Ocean",
                     "service": "Droplets",
                     "name": droplet["name"],
-                    "type": droplet["image"]["distribution"]
-                    + " "
-                    + droplet["image"]["name"],
+                    "type": droplet["image"]["distribution"] + " " + droplet["image"]["name"],
                     "monthly_cost": droplet["size"]["price_monthly"],
                     "cost_to_date": cost_to_date,
                     "state": droplet["status"],
                     "private_ip": priv_addresses,
                     "public_ip": pub_addresses,
-                    "launch_time": datetime.strptime(
-                        droplet["created_at"].split("T")[0], "%Y-%m-%d"
-                    ).replace(tzinfo=utc),
+                    "launch_time": datetime.strptime(droplet["created_at"].split("T")[0], "%Y-%m-%d").replace(
+                        tzinfo=utc
+                    ),
                     "time_up": "{} months".format(time_up),
                     "tags": ", ".join(droplet["tags"]),
                     "ignore": ignore,

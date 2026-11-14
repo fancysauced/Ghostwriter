@@ -1,0 +1,100 @@
+{% load bleach_tags custom_tags %}
+
+<div id="template_detail_{{ template.id }}" class="modal fade detail-preview-modal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-super-sized modal-dialog-scrollable modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <span class="detail-preview-modal-eyebrow">Report template</span>
+          <h2 class="modal-title">{{ template }}</h2>
+        </div>
+        <button type="button" class="btn-close detail-preview-modal-close" data-bs-dismiss="modal" aria-label="Close">
+        </button>
+      </div>
+      <div class="modal-body">
+
+        <div class="detail-preview-modal-tags">
+          {% if template.protected %}<span class="detail-preview-modal-tag is-protected">Protected</span>{% endif %}
+          <span class="detail-preview-modal-tag">{% if template.landscape %}Landscape{% else %}Portrait{% endif %}</span>
+          {% for tag in template.tags.all %}<span class="detail-preview-modal-tag">{{ tag.name }}</span>{% endfor %}
+        </div>
+
+        <h5>Template Description</h5>
+        {% if template.description %}
+          {{ template.description|bleach|safe }}
+        {% else %}
+          <div class="empty-state">
+            <p class="empty-state-title">No description provided</p>
+            <p class="empty-state-description">Add guidance that helps operators choose the right template.{% if request.user|can_edit_report_template:template %} <a class="clickable" href="{% url 'reporting:template_update' template.id %}">Edit template</a>.{% endif %}</p>
+          </div>
+        {% endif %}
+
+        <h5>Linting Results</h5>
+        {% if template.lint_result %}
+            {% with template.lint_result as lint_result %}
+                <div
+                    {% if lint_result.result == "success" %}
+                        class="alert alert-success"
+                    {% elif lint_result.result == "warning" %}
+                        class="alert alert-warning"
+                    {% else %}
+                        class="alert alert-danger"
+                    {% endif %}
+                role="alert">
+                    <h4 class="alert-heading template-lint-alert-heading">{{ lint_result.result|capfirst }}</h4>
+                    {% if lint_result.result == "success" %}
+                      <p>Template passed all linter checks, but try using it for a report to test it with findings and custom fields.</p>
+                    {% else %}
+                      <p>To correct these issues, make changes and re-upload this template.
+                        See the documentation for more information on how to fix these issues:<br/>
+                        <a class="italic" href="https://www.ghostwriter.wiki/features/reporting/report-templates" target="_blank">
+                          https://www.ghostwriter.wiki/features/reporting/report-templates
+                        </a>
+                      </p>
+                    {% endif %}
+                </div>
+
+                {% if lint_result.warnings %}
+                    <table class="table table-borderless">
+                        {% for warning in lint_result.warnings %}
+                            <tr>
+                                <td >
+                                    <span class="template-lint-status is-warning">Warning</span>
+                                </td>
+                                <td class="text-start">
+                                    {{ warning }}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </table>
+                {% endif %}
+
+                {% if lint_result.errors %}
+                    <table class="table table-borderless">
+                        {% for error in lint_result.errors %}
+                            <tr>
+                                <td>
+                                    <span class="template-lint-status is-error">Error</span>
+                                </td>
+                                <td class="text-start">
+                                    {{ error }}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </table>
+                    <p><strong>Note:</strong> Syntax errors tied to undefined variables might be linked to a Table of Contents picking up a variable (e.g., <em>finding.title</em>) outside of a loop.</p>
+                {% endif %}
+            {% endwith %}
+        {% else %}
+            <div class="empty-state">
+                <p class="empty-state-title">No linting results yet</p>
+                <p class="empty-state-description">Run the linter to check this template for reporting issues.</p>
+            </div>
+        {% endif %}
+      </div>
+      <div class="modal-footer detail-preview-modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

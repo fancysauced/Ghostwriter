@@ -2,7 +2,13 @@ table:
   name: commandcenter_companyinformation
   schema: public
 configuration:
-  comment: null
+  column_config:
+    company_email:
+      custom_name: email
+    company_name:
+      custom_name: name
+    company_twitter:
+      custom_name: twitter
   custom_column_names:
     company_email: email
     company_name: name
@@ -10,36 +16,34 @@ configuration:
   custom_name: companyInfo
   custom_root_fields: {}
 select_permissions:
-- permission:
-    columns:
-    - company_email
-    - company_name
-    - company_twitter
-    - id
-    filter: {}
-  role: manager
-- permission:
-    columns:
-    - company_email
-    - company_name
-    - company_twitter
-    - id
-    filter: {}
-  role: restricted
-- permission:
-    columns:
-    - company_email
-    - company_name
-    - company_twitter
-    - id
-    filter: {}
-  role: user
+  - role: manager
+    permission:
+      columns:
+        - company_address
+        - company_email
+        - company_name
+        - company_short_name
+        - company_twitter
+        - id
+      filter: {}
+  - role: user
+    permission:
+      columns:
+        - id
+        - company_email
+        - company_name
+        - company_short_name
+        - company_twitter
+        - company_address
+      filter: {}
 update_permissions:
-- permission:
-    check: null
-    columns:
-    - company_email
-    - company_name
-    - company_twitter
-    filter: {}
-  role: manager
+  - role: manager
+    permission:
+      columns:
+        - company_address
+        - company_email
+        - company_name
+        - company_short_name
+        - company_twitter
+      filter: {}
+      check: null

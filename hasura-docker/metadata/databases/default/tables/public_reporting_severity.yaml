@@ -2,39 +2,45 @@ table:
   name: reporting_severity
   schema: public
 configuration:
-  comment: null
+  column_config: {}
   custom_column_names: {}
   custom_name: findingSeverity
   custom_root_fields: {}
 array_relationships:
-- name: findings
-  using:
-    foreign_key_constraint_on:
-      column: severity_id
-      table:
-        name: reporting_finding
-        schema: public
-- name: reportedFindings
-  using:
-    foreign_key_constraint_on:
-      column: severity_id
-      table:
-        name: reporting_reportfindinglink
-        schema: public
+  - name: findings
+    using:
+      foreign_key_constraint_on:
+        column: severity_id
+        table:
+          name: reporting_finding
+          schema: public
+  - name: reportedFindings
+    using:
+      foreign_key_constraint_on:
+        column: severity_id
+        table:
+          name: reporting_reportfindinglink
+          schema: public
 select_permissions:
-- permission:
-    columns:
-    - id
-    - severity
-    - weight
-    - color
-    filter: {}
-  role: manager
-- permission:
-    columns: "*"
-    filter: {}
-  role: restricted
-- permission:
-    columns: "*"
-    filter: {}
-  role: user
+  - role: collab
+    permission:
+      columns:
+        - id
+        - severity
+      filter: {}
+  - role: manager
+    permission:
+      columns:
+        - id
+        - severity
+        - weight
+        - color
+      filter: {}
+  - role: service
+    permission:
+      columns: '*'
+      filter: {}
+  - role: user
+    permission:
+      columns: '*'
+      filter: {}

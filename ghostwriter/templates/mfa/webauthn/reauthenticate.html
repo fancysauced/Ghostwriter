@@ -1,0 +1,30 @@
+{% extends "account/base_reauthenticate.html" %}
+{% load i18n %}
+{% load allauth %}
+{% load crispy_forms_tags %}
+
+{% block reauthenticate_content %}
+    <p class="auth-journey-intro">{% trans "Use a registered security key or this device to continue." %}</p>
+    <div class="auth-journey-status auth-mfa-webauthn-note" role="note">
+      <i class="fas fa-fingerprint" aria-hidden="true"></i>
+      <p>{% trans "Your browser will ask you to use a registered security key, device PIN, or biometric check." %}</p>
+    </div>
+    <form method="post" action="{% url 'mfa_reauthenticate_webauthn' %}" class="auth-journey-form auth-mfa-reauthentication-form">
+        {% csrf_token %}
+        {{ form.credential }}
+        {{ redirect_field }}
+        <div class="auth-journey-actions">
+          <button id="mfa_webauthn_reauthenticate" type="submit" class="btn btn-primary auth-challenge-submit"><i class="fas fa-fingerprint" aria-hidden="true"></i> {% trans "Use a security key" %}</button>
+        </div>
+    </form>
+    {{ js_data|json_script:"js_data" }}
+    {% include "mfa/webauthn/snippets/scripts.html" %}
+    <script data-allauth-onload="allauth.webauthn.forms.authenticateForm" type="application/json">{
+    "ids": {
+        "authenticate": "mfa_webauthn_reauthenticate",
+        "credential": "{{ form.credential.auto_id }}",
+        "data": "js_data"
+    }
+}
+    </script>
+{% endblock %}

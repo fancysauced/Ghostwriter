@@ -1,0 +1,30 @@
+{% extends "base_generic.html" %}
+{% load crispy_forms_tags %}
+
+{% block pagetitle %}Assign Finding{% endblock %}
+
+
+{% block content %}
+  <header class="resource-form-page-heading mb-4">
+    <span class="detail-eyebrow">Report Workflow</span>
+    <h1>Assign finding</h1>
+    <p>{{ object }}</p>
+  </header>
+
+  {% if form.errors %}
+  <script>
+    {% for field in form %}
+      {% for error in field.errors %}
+        displayToastTop({type: 'error', string: '{{ error|escapejs }}', context: 'form'});
+      {% endfor %}
+    {% endfor %}
+    {% for error in form.non_field_errors %}
+      displayToastTop({type: 'error', string: '{{ error|escapejs }}', context: 'form'});
+    {% endfor %}
+  </script>
+  {% endif %}
+
+  <div class="resource-form-shell">
+    {% crispy form form.helper %}
+  </div>
+{% endblock %}

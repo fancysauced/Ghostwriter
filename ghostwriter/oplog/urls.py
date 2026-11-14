@@ -1,37 +1,65 @@
-"""This contains all of the URL mappings used by the Oplog application."""
+"""This contains all the URL mappings used by the Oplog application."""
 
+# Django Imports
+from django.urls import path
 
-from django.urls import include, path
-from rest_framework import routers
-
-from . import views
+# Ghostwriter Libraries
+from ghostwriter.oplog import views
 
 app_name = "ghostwriter.oplog"
 
-router = routers.DefaultRouter()
-router.register("entries", views.OplogEntryViewSet)
-router.register("oplogs", views.OplogViewSet)
-
 urlpatterns = [
-    path("", views.index, name="index"),
-    path("api/", include(router.urls)),
+    path("", views.OplogListView.as_view(), name="index"),
     path("create/<int:pk>", views.OplogCreate.as_view(), name="oplog_create"),
     path("create/", views.OplogCreate.as_view(), name="oplog_create_no_project"),
+    path("update/<int:pk>", views.OplogUpdate.as_view(), name="oplog_update"),
     path(
-        "<int:pk>/entries/create",
+        "entry/create/<int:pk>",
         views.OplogEntryCreate.as_view(),
         name="oplog_entry_create",
     ),
     path(
-        "<int:pk>/entries/update",
+        "entry/update/<int:pk>",
         views.OplogEntryUpdate.as_view(),
         name="oplog_entry_update",
     ),
     path(
-        "<int:pk>/entries/delete",
+        "entry/delete/<int:pk>",
         views.OplogEntryDelete.as_view(),
         name="oplog_entry_delete",
     ),
-    path("<int:pk>/entries", views.OplogListEntries, name="oplog_entries"),
-    path("import", views.OplogEntriesImport, name="oplog_import"),
+    path("<int:pk>/entries", views.OplogListEntries.as_view(), name="oplog_entries"),
+    path("import", views.oplog_entries_import, name="oplog_import"),
+    path("export/<int:pk>", views.OplogExport.as_view(), name="oplog_export"),
+    path(
+        "entry/<int:pk>/evidence/upload",
+        views.OplogEvidenceCreate.as_view(),
+        name="oplog_entry_evidence_upload",
+    ),
+    path(
+        "entry/<int:pk>/evidence/list",
+        views.OplogEntryEvidenceList.as_view(),
+        name="oplog_entry_evidence_list",
+    ),
+    path(
+        "entry/<int:pk>/recording/upload",
+        views.OplogRecordingUpload.as_view(),
+        name="oplog_entry_recording_upload",
+    ),
+    path(
+        "entry/<int:pk>/recording/delete",
+        views.OplogRecordingDelete.as_view(),
+        name="oplog_entry_recording_delete",
+    ),
+    path(
+        "recording/<int:pk>/download",
+        views.OplogRecordingDownload.as_view(),
+        name="oplog_entry_recording_download",
+    ),
+]
+
+# URLs for AJAX requests
+urlpatterns += [
+    path("ajax/oplog/mute/<int:pk>", views.OplogMuteToggle.as_view(), name="ajax_oplog_mute_toggle"),
+    path("ajax/oplog/sanitize/<int:pk>", views.OplogSanitize.as_view(), name="ajax_oplog_sanitize"),
 ]

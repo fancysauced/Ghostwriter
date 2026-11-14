@@ -1,0 +1,39 @@
+{% extends "collab_editing/update.html" %}
+
+{% load static %}
+
+{% block pagetitle %}Report Form{% endblock %}
+
+
+{% block content %}
+  <div class="report-field-workspace">
+    <header class="detail-page-heading resource-detail-heading mb-2">
+      <div class="resource-form-page-heading">
+        <span class="detail-eyebrow">Report Extra Field</span>
+        <h1>Edit {{ target_field.display_name }}</h1>
+        <p>Changes to this field on {{ report }} save automatically while collaboration is connected.</p>
+      </div>
+      <div class="detail-page-heading-actions">
+        <a class="btn btn-outline-primary btn-sm"
+           href="{% url 'reporting:report_detail' pk=report.pk %}#extra-fields">
+          <i class="fas fa-arrow-left me-1" aria-hidden="true"></i>Back to report
+        </a>
+      </div>
+    </header>
+    <div class="resource-form-shell">
+      {{ block.super }}
+    </div>
+  </div>
+{% endblock %}
+
+{% block collab_form_attrs %}
+  data-extra-field-name="{{ target_field.internal_name }}"
+{% endblock %}
+
+{%  block morescripts %}
+    {{ block.super }}
+    {{ report_oplogs|json_script:"report-oplog-options" }}
+    <script type="text/plain" id="graphql-evidence-upload-url">{% url 'reporting:upload_evidence' object.id %}</script>
+    <script type="text/plain" id="graphql-evidence-report-id">{{ object.id }}</script>
+    <script type="text/plain" id="report-oplog-outline-url">{% url 'reporting:report_generate_oplog_outline' object.id %}</script>
+{% endblock %}

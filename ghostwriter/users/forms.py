@@ -1,4 +1,4 @@
-"""This contains all of the forms used by the Users application."""
+"""This contains all the forms used by the Users application."""
 
 # Django Imports
 from django.contrib.admin.widgets import FilteredSelectMultiple
@@ -6,12 +6,18 @@ from django.contrib.auth import forms, get_user_model
 from django.contrib.auth.forms import UserChangeForm
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
-from django.forms import ModelForm, ModelMultipleChoiceField
+from django.forms import CharField, ModelForm, ModelMultipleChoiceField, TextInput
 from django.utils.translation import gettext_lazy as _
 
 # 3rd Party Libraries
+from allauth.account.forms import LoginForm, SignupForm
+from allauth.mfa.adapter import get_adapter
+from allauth.mfa.base.forms import AuthenticateForm
+from allauth.mfa.base.internal.flows import check_rate_limit
+from allauth.mfa.models import Authenticator
+from allauth.mfa.totp.forms import ActivateTOTPForm, DeactivateTOTPForm
 from crispy_forms.helper import FormHelper
-from crispy_forms.layout import HTML, ButtonHolder, Column, Layout, Row, Submit
+from crispy_forms.layout import Div, HTML, Column, Layout, Row, Submit
 
 User = get_user_model()
 
@@ -24,8 +30,8 @@ class UserChangeForm(UserChangeForm):
     class Meta:
         model = get_user_model()
         fields = (
-            "email",
             "name",
+            "report_email",
             "timezone",
             "phone",
         )
@@ -33,31 +39,67 @@ class UserChangeForm(UserChangeForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["phone"].widget.attrs["autocomplete"] = "off"
-        self.fields["phone"].widget.attrs["placeholder"] = "Your Work Number"
+        self.fields["name"].widget.attrs["autocomplete"] = "off"
+        self.fields["phone"].widget.attrs["placeholder"] = "(212) 555-2368"
         self.fields["phone"].help_text = "Work phone number for work contacts"
-        self.fields["timezone"].help_text = "Timezone in which you work"
+        timezone_choices = [
+            {"value": str(value), "label": str(label)}
+            for value, label in self.fields["timezone"].choices
+            if value
+        ]
+        self.fields["timezone"].widget = TextInput(
+            attrs={
+                "autocomplete": "off",
+                "class": "form-control profile-timezone-input",
+                "data-timezone-search": "true",
+                "spellcheck": "false",
+            }
+        )
+        self.fields["timezone"].help_text = (
+            "Start typing a city or region, then choose a timezone"
+        )
+        self.timezone_choices = timezone_choices
+        self.fields["name"].help_text = "Your full name as it should appear in reports"
+        self.fields["name"].label = "Your Full Name"
+        self.fields["report_email"].label = "Report Email Address"
+        self.fields["report_email"].help_text = (
+            "Optional address shown for you in project and report team lists. "
+            "Leave blank to use your account email. This does not change your account email or SSO sign-in."
+        )
+        self.fields["timezone"].label = "Your Timezone"
+        self.fields["phone"].label = "Your Contact Number"
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.form_class = "newitem"
-        self.helper.form_show_labels = False
+        self.helper.form_class = "resource-edit-form"
         self.helper.layout = Layout(
-            Row(
-                Column("name", css_class="form-group col-md-6 mb-0"),
-                Column("email", css_class="form-group col-md-6 mb-0"),
-                css_class="form-row mt-4",
-            ),
-            Row(
-                Column("phone", css_class="form-group col-md-6 mb-0"),
-                Column("timezone", css_class="form-group col-md-6 mb-0"),
-                css_class="form-row",
-            ),
-            ButtonHolder(
-                Submit("submit", "Submit", css_class="btn btn-primary col-md-4"),
+            Div(
                 HTML(
                     """
-                    <button onclick="window.location.href='{{ cancel_link }}'" class="btn btn-outline-secondary col-md-4" type="button">Cancel</button>
+                    <div class="resource-form-section-heading">
+                      <span class="resource-form-section-icon"><i class="fas fa-user" aria-hidden="true"></i></span>
+                      <div>
+                        <h1>Operator identity</h1>
+                        <p>Edit the contact details and timezone used for assignments and reports.</p>
+                      </div>
+                    </div>
                     """
                 ),
+                "name",
+                Row(
+                    Column("phone", css_class="col-md-6"),
+                    Column("timezone", css_class="col-md-6"),
+                    css_class="row g-3",
+                ),
+                "report_email",
+                css_class="resource-form-card",
+            ),
+            Div(
+                Div(
+                    HTML("""<a href="{{ cancel_link }}" class="btn btn-outline-secondary">Cancel</a>"""),
+                    Submit("submit", "Save Changes", css_class="btn btn-primary"),
+                    css_class="resource-form-actions-buttons",
+                ),
+                css_class="resource-form-actions resource-form-actions-compact",
             ),
         )
 
@@ -103,7 +145,7 @@ class GroupAdminForm(ModelForm):
     )
 
     def __init__(self, *args, **kwargs):
-        # Do the normal form initialisation
+        # Do the normal form initialization
         super().__init__(*args, **kwargs)
         # If it is an existing group (saved objects have a pk)
         if self.instance.pk:
@@ -120,3 +162,207 @@ class GroupAdminForm(ModelForm):
         # Save many-to-many data
         self.save_m2m()
         return instance
+
+
+class UserLoginForm(LoginForm):
+    """
+    Authenticate an individual :model:`users.User` with their username and password. This is customized
+    to make adjustments like disabling autocomplete on the password field.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields:
+            self.fields[field].widget.attrs["autocomplete"] = "off"
+        self.fields["login"].widget.attrs["placeholder"] = "Username"
+        self.fields["password"].widget.attrs["placeholder"] = "Password"
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_tag = False
+        self.helper.form_show_errors = False
+        self.helper.layout = Layout(
+            Row(
+                Column("login", css_class="col-12 mb-0"),
+                css_class="row g-3 mt-4",
+            ),
+            Row(
+                Column("password", css_class="col-12 mb-0"),
+                css_class="row g-3",
+            ),
+            Row(
+                Column("remember", css_class="col-12 mb-0"),
+                css_class="row g-3",
+            ),
+        )
+
+
+class UserSignupForm(SignupForm):
+    """
+    Register an individual :model:`users.User` with a username, email, and full name. The resulting user is attached
+    to a social login.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields:
+            self.fields[field].widget.attrs["autocomplete"] = "off"
+        self.fields["email"].widget.attrs["placeholder"] = "Email Address"
+        self.fields["email"].label = "Email Address"
+        self.fields["name"].widget.attrs["placeholder"] = "Full Name"
+        self.fields["password2"].widget.attrs["placeholder"] = "Repeat Password"
+        self.fields["password2"].label = "Password (Again)"
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_tag = False
+        self.helper.form_show_errors = False
+        self.helper.layout = Layout(
+            Row(
+                Column("name", css_class="col-12 mb-0"),
+                css_class="row g-3",
+            ),
+            Row(
+                Column("email", css_class="col-12 mb-0"),
+                css_class="row g-3 mt-4",
+            ),
+            Row(
+                Column("username", css_class="col-12 mb-0"),
+                css_class="row g-3",
+            ),
+            Row(
+                Column("password1", css_class="col-12 mb-0"),
+                css_class="row g-3",
+            ),
+            Row(
+                Column("password2", css_class="col-12 mb-0"),
+                css_class="row g-3",
+            ),
+        )
+
+
+class UserMFAAuthenticateForm(AuthenticateForm):
+    """
+    Authenticate an individual :model:`users.User` with their TOTP. This is customized
+    to support one-time-code entry while retaining recovery-code authentication.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["code"].label = _("Authentication or recovery code")
+        self.fields["code"].help_text = _(
+            "Enter the current code from your authenticator app or an unused recovery code."
+        )
+        self.fields["code"].widget.attrs.update(
+            {
+                "autocomplete": "one-time-code",
+                "autocapitalize": "off",
+                "spellcheck": "false",
+                "placeholder": _("Enter code"),
+            }
+        )
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_tag = False
+        self.helper.layout = Layout("code")
+
+    def clean_code(self):
+        clear_rl = check_rate_limit(self.user)
+        code = self.cleaned_data["code"]
+        for auth in Authenticator.objects.filter(user=self.user).exclude(
+            # WebAuthn cannot validate manual codes.
+            type=Authenticator.Type.WEBAUTHN
+        ):
+            if auth.wrap().validate_code(code):
+                self.authenticator = auth
+                clear_rl()
+                return code
+
+        raise get_adapter().validation_error("incorrect_code")
+
+
+class UserMFADeviceForm(ActivateTOTPForm):
+    """
+    Enroll an MFA device for an individual :model:`users.User`. This is customized
+    to optimize the verification field for one-time-code entry.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["code"].label = _("6-digit authenticator code")
+        self.fields["code"].help_text = _(
+            "Enter the current code from your authenticator app."
+        )
+        self.fields["code"].widget.attrs.update(
+            {
+                "autocomplete": "one-time-code",
+                "inputmode": "numeric",
+                "pattern": "[0-9]{6}",
+                "maxlength": "6",
+                "placeholder": "123456",
+            }
+        )
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_tag = False
+        self.helper.layout = Layout("code")
+
+
+class UserMFADeviceRemoveForm(DeactivateTOTPForm):
+    """
+    Remove an MFA device enrolled for an individual :model:`users.User`. This is customized
+    to require the current authenticator code and apply rate limiting.
+    """
+    code = CharField(
+        label=_("Current authenticator code"),
+        max_length=6,
+        min_length=6,
+        required=True,
+        widget=TextInput(
+            attrs={
+                "placeholder": "Enter 6-digit code",
+                "autocomplete": "one-time-code",
+                "inputmode": "numeric",
+                "pattern": "[0-9]{6}",
+            }
+        ),
+        help_text=_(
+            "Enter the current 6-digit code from your authenticator app to confirm deactivation."
+        ),
+    )
+
+    def __init__(self, *args, **kwargs):
+        self.authenticator = kwargs.get("authenticator")
+        self.user = kwargs.pop("user", None)
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_tag = False
+        self.helper.layout = Layout("code")
+
+    def clean_code(self):
+        """
+        Validate the TOTP code against the authenticator.
+        """
+
+        if not self.user:
+            raise ValidationError("User context is required for rate limiting.")
+
+        if not self.authenticator:
+            raise ValidationError("No authenticator device found.")
+
+        clear_rl = check_rate_limit(self.user)
+        code = self.cleaned_data.get("code")
+
+        # Validate the TOTP code
+        if self.authenticator.wrap().validate_code(code):
+            clear_rl()
+            return code
+
+        raise get_adapter().validation_error("incorrect_code")
+
+    def clean(self):
+        """
+        Ensure authenticator is present before proceeding.
+        """
+        cleaned_data = super().clean()
+
+        return cleaned_data

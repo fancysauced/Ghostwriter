@@ -1,46 +1,81 @@
 {% extends "base_generic.html" %}
 {% load crispy_forms_tags %}
 
-{% block pagetitle %}Report Creation{% endblock %}
+{% block pagetitle %}{% if object %}Edit {{ object.name }}{% else %}New Report Template{% endif %}{% endblock %}
 
-{% block breadcrumbs %}
-    <nav aria-label="breadcrumb">
-        <ul class="breadcrumb">
-        {% comment %} Create breadcrumbs based on the context of the request {% endcomment %}
-            <li class="breadcrumb-item"><a href="{% url 'home:dashboard' %}">Dashboard</a></li>
-            <li class="breadcrumb-item"><a href="{% url 'reporting:templates' %}">Report Templates</a></li>
-            <li class="breadcrumb-item active" aria-current="page">Report Template Form</li>
-        </ul>
-    </nav>
-{% endblock %}
 
 {% block content %}
-    <!-- Instructions Section -->
-    <p>Provide informatin for this report template:</p>
+  <div class="resource-edit-page">
+    <header class="detail-page-heading resource-detail-heading resource-edit-heading">
+      <div class="detail-page-heading-main resource-detail-heading-main">
+        <span class="detail-eyebrow">{% if object %}Edit Report Template{% else %}Create Report Template{% endif %}</span>
+        <h2 class="mb-0">{% if object %}{{ object.name }}{% else %}New template{% endif %}</h2>
+        <p class="resource-edit-intro mb-0">Configure how this document is discovered and how Ghostwriter renders report content into it.</p>
+      </div>
+    </header>
 
     <!-- Form Error Section -->
     {% if form.errors %}
-        <script>
-            {% for field in form %}
-                {% for error in field.errors %}
-                    displayToastTop({type:'error', string:'{{ error }}', context:'form'});
-                {% endfor %}
-            {% endfor %}
-            {% for error in form.non_field_errors %}
-                displayToastTop({type:'error', string:'{{ error }}', context:'form'});
-            {% endfor %}
-        </script>
+      <script>
+        {% for field in form %}
+          {% for error in field.errors %}
+            displayToastTop({type: 'error', string: '{{ error|escapejs }}', context: 'form'});
+          {% endfor %}
+        {% endfor %}
+        {% for error in form.non_field_errors %}
+          displayToastTop({type: 'error', string: '{{ error|escapejs }}', context: 'form'});
+        {% endfor %}
+      </script>
     {% endif %}
 
-    <!-- Form Section -->
+    <!-- Global default warning -->
+    {% if object and object == report_configuration.default_docx_template %}
+      <div class="alert alert-warning mt-3" role="alert">
+        This is the global default Word template. Changes affect reports that rely on the default.
+      </div>
+    {% elif object and object == report_configuration.default_pptx_template %}
+      <div class="alert alert-warning mt-3" role="alert">
+        This is the global default PowerPoint template. Changes affect reports that rely on the default.
+      </div>
+    {% endif %}
+
     {% crispy form form.helper %}
+  </div>
 {% endblock %}
 
 {% block morescripts %}
-    <!-- Script for File Upload -->
-    <script>
-        $('input[type=file]').on('change', function() {
-            $("#filename").text($(this).val());
-        });
-    </script>
+  <!-- Script for File Upload -->
+  <script>
+    const fileInput = document.getElementById('id_document');
+    const filenameLabel = document.getElementById('filename');
+    const $doc_type = $('#id_doc_type');
+    const $orientation = $('#id_landscape');
+
+    // Add frame when dragging file into input
+    fileInput.addEventListener('dragover', function () {
+      filenameLabel.classList.add('dragging');
+    });
+    fileInput.addEventListener('dragenter', function () {
+      filenameLabel.classList.add('dragging');
+    });
+    // Removes drag class when drag leaves or file is dropped
+    fileInput.addEventListener('dragleave', function () {
+      filenameLabel.classList.remove('dragging');
+    });
+    fileInput.addEventListener('drop', function () {
+      filenameLabel.classList.remove('dragging');
+    });
+
+    $('input[type=file]').on('change', function () {
+      let filename = $(this).val().split('\\').pop();
+      filenameLabel.querySelector('span').textContent = filename;
+    });
+
+    $doc_type.on('change', function () {
+       let selection = $('#id_doc_type option:selected').text();
+       if (selection == 'pptx') {
+         $orientation.prop('checked', true);
+       }
+    });
+  </script>
 {% endblock %}

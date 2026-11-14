@@ -1,35 +1,310 @@
-"""This contains all of the views used by the Oplog application."""
+"""This contains all the views used by the Oplog application."""
 
 # Standard Libraries
+import collections
+import csv
+import io
+import json
 import logging
+import mimetypes
+import os
+import tempfile
+import zipfile
+from datetime import datetime
+from itertools import count
 
 # Django Imports
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import HttpResponse, HttpResponseRedirect
-from django.shortcuts import get_object_or_404, render
+from django.db import connection, transaction
+from django.http import (
+    FileResponse,
+    Http404,
+    HttpResponse,
+    HttpResponseRedirect,
+    JsonResponse,
+)
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.generic.edit import CreateView, DeleteView, UpdateView
+from django.views.generic import ListView
+from django.views.generic.detail import DetailView, SingleObjectMixin
+from django.views.generic.edit import CreateView, DeleteView, UpdateView, View
 
 # 3rd Party Libraries
-from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework_api_key.models import APIKey
-from rest_framework_api_key.permissions import HasAPIKey
 from tablib import Dataset
 
 # Ghostwriter Libraries
+from ghostwriter.api.utils import RoleBasedAccessControlMixin, verify_user_is_privileged
+from ghostwriter.commandcenter.models import ExtraFieldSpec
+from ghostwriter.modules.custom_serializers import ExtraFieldsSpecSerializer
+from ghostwriter.modules.shared import add_content_disposition_header
+from ghostwriter.oplog.admin import OplogEntryResource
+from ghostwriter.oplog.forms import OplogEntryForm, OplogEvidenceForm, OplogForm
+from ghostwriter.oplog.models import (
+    Oplog,
+    OplogEntry,
+    OplogEntryEvidence,
+    OplogEntryRecording,
+    OplogSanitization,
+)
+from ghostwriter.oplog.utils import (
+    extract_cast_text,
+    get_cast_parse_input_bytes,
+    validate_cast_gzip_upload,
+)
+from ghostwriter.reporting.models import Report
 from ghostwriter.rolodex.models import Project
-
-from .admin import OplogEntryResource
-from .forms import OplogEntryForm, OplogForm
-from .models import Oplog, OplogEntry
-from .serializers import OplogEntrySerializer, OplogSerializer
 
 # Using __name__ resolves to ghostwriter.oplog.views
 logger = logging.getLogger(__name__)
+
+
+def escape_message(message):
+    """
+    Escape single quotes, double quotes, newlines and other characters
+    that may break JavaScript.
+    """
+    # Replace single quotes
+    message = message.replace("'", "")
+    # Replace double quotes
+    message = message.replace('"', "")
+    # Replace newlines
+    message = message.replace("\n", "\\n")
+    # Replace carriage return
+    message = message.replace("\r", "\\r")
+    # Replace horizontal tab
+    message = message.replace("\t", "\\t")
+    # Replace backspace
+    message = message.replace("\b", "\\b")
+    # Replace form feed
+    message = message.replace("\f", "\\f")
+    return message
+
+
+##################
+#   AJAX Views   #
+##################
+
+
+class OplogMuteToggle(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Toggle the ``mute_notifications`` field of an individual :model:`oplog.Oplog`."""
+
+    model = Oplog
+
+    def test_func(self):
+        # Only allow managers and admins to mute notifications
+        return verify_user_is_privileged(self.request.user)
+
+    def handle_no_permission(self):
+        data = {
+            "result": "error",
+            "message": "Only a manager or admin can mute notifications.",
+        }
+        return JsonResponse(data, status=403)
+
+    def post(self, *args, **kwargs):
+        obj = self.get_object()
+        try:
+            if obj.mute_notifications:
+                obj.mute_notifications = False
+                data = {
+                    "result": "success",
+                    "message": "Log monitor notifications have been unmuted.",
+                    "toggle": 0,
+                }
+            else:
+                obj.mute_notifications = True
+                data = {
+                    "result": "success",
+                    "message": "Log monitor notifications have been muted.",
+                    "toggle": 1,
+                }
+            obj.save()
+            logger.info(
+                "Toggled notifications for %s %s by request of %s",
+                obj.__class__.__name__,
+                obj.id,
+                self.request.user,
+            )
+        except Exception as exception:  # pragma: no cover
+            template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+            log_message = template.format(type(exception).__name__, exception.args)
+            logger.error(log_message)
+            data = {
+                "result": "error",
+                "message": "Could not update mute status for log monitor notifications.",
+            }
+
+        return JsonResponse(data)
+
+
+class OplogSanitize(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """
+    Sanitize all :model:`oplog.OplogEntry` objects associated with an individual :model:`oplog.Oplog`.
+
+    Sanitization nullifies the `source_ip`, `dest_ip`, `description`, `output`, `user_context` and `comments` fields.
+    It also removes everything after the first space in the `command` field. This action keeps the command while
+    removing any arguments or options that may be sensitive (e.g., hashes, keys).
+    """
+
+    model = Oplog
+
+    clearable_fields = {
+        "entry_identifier",
+        "start_date",
+        "end_date",
+        "source_ip",
+        "dest_ip",
+        "tool",
+        "user_context",
+        "description",
+        "output",
+        "comments",
+        "operator_name",
+    }
+    nullable_date_fields = {"start_date", "end_date"}
+
+    def test_func(self):
+        return verify_user_is_privileged(self.request.user)
+
+    def handle_no_permission(self):
+        data = {
+            "result": "error",
+            "message": "Only a manager or admin can choose to sanitize a log.",
+        }
+        return JsonResponse(data, status=403)
+
+    def post(self, *args, **kwargs):
+        obj = self.get_object()
+        data = self.request.POST.get("fields", None)
+        try:
+            fields_json = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            fields_json = []
+
+        if not isinstance(fields_json, list):
+            fields_json = []
+        requested_fields = list(
+            dict.fromkeys(
+                field["name"]
+                for field in fields_json
+                if isinstance(field, dict) and isinstance(field.get("name"), str)
+            )
+        )
+
+        # Extract ``sanitize_recordings`` flag from the posted JSON before the existing field filtering
+        sanitize_recordings = "recordings" in requested_fields
+
+        entry_field_specs = {
+            spec.internal_name: spec for spec in ExtraFieldSpec.for_model(OplogEntry)
+        }
+        fields = [
+            field
+            for field in requested_fields
+            if field == "command"
+            or field == "tags"
+            or field in self.clearable_fields
+            or field in entry_field_specs
+        ]
+        if sanitize_recordings:
+            fields.append("recordings")
+
+        bulk_update_fields = [
+            field
+            for field in requested_fields
+            if field == "command" or field in self.clearable_fields
+        ]
+        if any(field in entry_field_specs for field in requested_fields):
+            bulk_update_fields.append("extra_fields")
+
+        # Allows a recordings-only sanitization that doesn't require any field selections, since recordings are handled separately
+        if fields or sanitize_recordings:
+            entries = list(obj.entries.all())
+            logger.info(
+                "Sanitizing log entries for %s %s by request of %s",
+                obj.__class__.__name__,
+                obj.id,
+                self.request.user,
+            )
+            data = {
+                "result": "success",
+                "message": "Successfully sanitized log entries.",
+            }
+            try:
+                with transaction.atomic():
+                    for entry in entries:
+                        # Only process fields if non-recording fields were selected; otherwise skip directly to recording sanitization
+                        if fields:
+                            extra_fields_data = entry.extra_fields
+                            for field in fields:
+                                if field == "command":
+                                    if entry.command:
+                                        setattr(
+                                            entry, field, entry.command.split(" ")[0]
+                                        )
+                                elif field == "tags":
+                                    entry.tags.clear()
+                                elif field in self.clearable_fields:
+                                    setattr(
+                                        entry,
+                                        field,
+                                        None
+                                        if field in self.nullable_date_fields
+                                        else "",
+                                    )
+                                elif field in entry_field_specs:
+                                    extra_fields_data[field] = entry_field_specs[
+                                        field
+                                    ].empty_value()
+                            entry.extra_fields = extra_fields_data
+
+                        if sanitize_recordings:
+                            try:
+                                entry.recording.delete()
+                            except OplogEntryRecording.DoesNotExist:
+                                # Entries without recordings are expected during bulk sanitization.
+                                pass
+
+                    # Tags are a many-to-many relation and cannot be passed to bulk_update.
+                    if bulk_update_fields:
+                        OplogEntry.objects.bulk_update(
+                            entries, bulk_update_fields, batch_size=100
+                        )
+
+                    # Use PostgreSQL's clock after the entry writes so the audit
+                    # timestamp and trigger-maintained ``updated_at`` values are
+                    # directly comparable.
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT clock_timestamp()")
+                        sanitized_at = cursor.fetchone()[0]
+
+                    sanitization = OplogSanitization.objects.create(
+                        oplog=obj,
+                        sanitized_at=sanitized_at,
+                        sanitized_by=self.request.user,
+                        sanitized_by_name=self.request.user.get_full_name()
+                        or self.request.user.username,
+                        fields=fields,
+                    )
+                    data["sanitization"] = {
+                        "sanitized_at": sanitization.sanitized_at.isoformat(),
+                        "sanitized_by_name": sanitization.sanitized_by_name,
+                    }
+            except Exception as exception:  # pragma: no cover
+                template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+                log_message = template.format(type(exception).__name__, exception.args)
+                logger.exception(log_message)
+                data = {
+                    "result": "failed",
+                    "message": "An error occurred while sanitizing log entries.",
+                }
+        else:
+            data = {
+                "result": "failed",
+                "message": "No fields selected for sanitization.",
+            }
+        return JsonResponse(data)
 
 
 ##################
@@ -37,22 +312,113 @@ logger = logging.getLogger(__name__)
 ##################
 
 
+def validate_headers(imported_data):
+    """Validate the headers of the CSV file for an activity log import."""
+    expected_header_count = collections.Counter(
+        [
+            "entry_identifier",
+            "start_date",
+            "end_date",
+            "source_ip",
+            "dest_ip",
+            "tool",
+            "user_context",
+            "command",
+            "description",
+            "comments",
+            "operator_name",
+            "tags",
+        ]
+    )
+    actual_header_count = collections.Counter(imported_data.headers)
+    num_extra_fields = actual_header_count.pop("extra_fields", 0)
+    num_output_fields = actual_header_count.pop("output", 0)
+    return (
+        expected_header_count == actual_header_count
+        and num_extra_fields in (0, 1)
+        and num_output_fields in (0, 1)
+    )
+
+
+def validate_log_selection(user, oplog_id):
+    """Validate the log selection for an activity log import."""
+    bad_selection = False
+    if isinstance(oplog_id, str):
+        if oplog_id.isdigit():
+            oplog_id = int(oplog_id)
+    if oplog_id and isinstance(oplog_id, int):
+        try:
+            oplog = Oplog.objects.get(id=oplog_id)
+            if not oplog.user_can_view(user):
+                bad_selection = True
+        except Oplog.DoesNotExist:
+            bad_selection = True
+    else:
+        bad_selection = True
+    return not bad_selection
+
+
+def import_data(request, oplog_id, new_entries, dry_run=False):
+    """Import the data into a dataset for validation and import."""
+    logger.info("Importing log data for log ID %s", oplog_id)
+    dataset = Dataset()
+    oplog_entry_resource = OplogEntryResource()
+    try:
+        imported_data = dataset.load(new_entries, format="csv")
+    except csv.Error:  # pragma: no cover
+        logger.exception("An error occurred while loading the CSV file for log import")
+        messages.error(
+            request,
+            "Your log file could not be loaded. There may be cells that exceed the 128KB text size limit for CSVs.",
+            extra_tags="alert-error",
+        )
+        return None
+
+    if "oplog_id" in imported_data.headers:
+        del imported_data["oplog_id"]
+
+    if validate_headers(imported_data):
+        imported_data.append_col([oplog_id] * len(imported_data), header="oplog_id")
+        result = oplog_entry_resource.import_data(imported_data, dry_run=dry_run)
+        return result
+
+    messages.error(
+        request,
+        "Your log file needs the required header row and at least one entry.",
+        extra_tags="alert-error",
+    )
+    return None
+
+
+def handle_errors(request, result):
+    """Handle errors from a dry run of an activity log import."""
+    row_errors = result.row_errors()
+    for row, errors in row_errors:
+        error_message = escape_message(
+            f"There was an error in row {row}: {errors[0].error}"
+        )
+        for err in errors:
+            logger.error("Could not import row %d", row, exc_info=err.error)
+        messages.error(
+            request,
+            error_message,
+            extra_tags="alert-danger",
+        )
+    for invalid_row in result.invalid_rows:
+        error = str(invalid_row.error).replace("'", "")
+        error_message = escape_message(
+            f"There was a validation error in row {invalid_row.number} with these errors: {error}"
+        )
+        logger.error(error_message)
+        messages.error(
+            request,
+            error_message,
+            extra_tags="alert-danger",
+        )
+
+
 @login_required
-def index(request):
-    """
-    Display a list of all :model:`oplog.Oplog`.
-
-    **Template**
-
-    :template:`oplog/oplog_list.html`
-    """
-    op_logs = Oplog.objects.all()
-    context = {"op_logs": op_logs}
-    return render(request, "oplog/oplog_list.html", context=context)
-
-
-@login_required
-def OplogEntriesImport(request):
+def oplog_entries_import(request):
     """
     Import a collection of :model:`oplog.OplogEntry` entries for an individual
     :model:`oplog.Oplog`.
@@ -61,58 +427,48 @@ def OplogEntriesImport(request):
 
     :template:`oplog/oplog_import.html`
     """
+
+    logs = Oplog.for_user(request.user)
     if request.method == "POST":
-        oplog_entry_resource = OplogEntryResource()
-
+        oplog_id = request.POST.get("oplog_id")
         new_entries = request.FILES["csv_file"].read().decode("iso-8859-1")
-        dataset = Dataset()
 
-        imported_data = dataset.load(new_entries, format="csv")
-        result = oplog_entry_resource.import_data(imported_data, dry_run=True)
-
-        if result.has_errors():
-            row_errors = result.row_errors()
-            for exc in row_errors:
-                messages.error(
-                    request,
-                    f"There was an error in row {exc[0]}: {exc[1][0].error}",
-                    extra_tags="alert-danger",
-                )
+        if not new_entries or not validate_log_selection(request.user, oplog_id):
+            messages.error(
+                request,
+                "Your log file needs the required header row and at least one entry.",
+                extra_tags="alert-error",
+            )
             return HttpResponseRedirect(reverse("oplog:oplog_import"))
-        oplog_entry_resource.import_data(imported_data, format="csv", dry_run=False)
-        # Get the first ``oplog_id`` value to use for a redirect
-        oplog_id = imported_data["oplog_id"][0]
+
+        imported_data = import_data(request, oplog_id, new_entries, dry_run=True)
+
+        if imported_data is None:
+            return HttpResponseRedirect(reverse("oplog:oplog_import"))
+
+        if imported_data.has_errors() or imported_data.has_validation_errors():
+            handle_errors(request, imported_data)
+            return HttpResponseRedirect(reverse("oplog:oplog_import"))
+
+        import_data(request, oplog_id, new_entries)
         messages.success(
-            request,
-            "Successfully imported log data",
-            extra_tags="alert-success",
+            request, "Successfully imported log data.", extra_tags="alert-success"
         )
         return HttpResponseRedirect(
             reverse("oplog:oplog_entries", kwargs={"pk": oplog_id})
         )
 
-    return render(request, "oplog/oplog_import.html")
-
-
-@login_required
-def OplogListEntries(request, pk):
-    """
-    Display all :model:`oplog.OplogEntry` associated with an individual
-    :model:`oplog.Oplog`.
-
-    **Template**
-
-    :template:`oplog/entries_list.html`
-    """
-    entries = OplogEntry.objects.filter(oplog_id=pk).order_by("-start_date")
-    oplog_instance = Oplog.objects.get(pk=pk)
-    context = {
-        "entries": entries,
-        "pk": pk,
-        "name": oplog_instance.name,
-        "project": oplog_instance.project,
-    }
-    return render(request, "oplog/entries_list.html", context=context)
+    log_id = request.GET.get("log", None)
+    initial_log = None
+    if log_id:
+        for log in logs:
+            if log_id == str(log.id):
+                initial_log = log
+    return render(
+        request,
+        "oplog/oplog_import.html",
+        context={"logs": logs, "initial_log": initial_log},
+    )
 
 
 ################
@@ -120,7 +476,97 @@ def OplogListEntries(request, pk):
 ################
 
 
-class OplogCreate(LoginRequiredMixin, CreateView):
+class OplogListView(RoleBasedAccessControlMixin, ListView):
+    """
+    Display a list of :model:`oplog.Oplog`. Only show logs associated with :model:`rolodex.Project`
+    to which the user has access.
+
+    **Template**
+
+    :template:`oplog/oplog_list.html`
+    """
+
+    model = Oplog
+    template_name = "oplog/oplog_list.html"
+
+    def get_queryset(self):
+        queryset = Oplog.for_user(self.request.user).select_related(
+            "project", "project__client", "project__project_type"
+        )
+        return queryset
+
+
+class OplogListEntries(RoleBasedAccessControlMixin, DetailView):
+    """
+    Display an individual :model:`oplog.Oplog`.
+
+    **Context**
+
+    ``entries``
+        :model:`oplog:OplogEntry` entries associated with the :model:`oplog.Oplog`.
+
+    **Template**
+
+    :template:`oplog/oplog_detail.html`
+    """
+
+    model = Oplog
+
+    def test_func(self):
+        return self.get_object().user_can_view(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("oplog:index")
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        entry_field_specs = ExtraFieldSpec.objects.filter(
+            target_model=OplogEntry._meta.label
+        )
+        ctx["oplog_entry_extra_fields_spec_ser"] = ExtraFieldsSpecSerializer(
+            entry_field_specs, many=True
+        ).data
+        ctx["project_has_reports"] = Report.objects.filter(
+            project=self.object.project
+        ).exists()
+        sanitization = self.object.sanitizations.first()
+        ctx["oplog_last_sanitization"] = sanitization
+        if sanitization:
+            latest_entry_update = (
+                self.object.entries.order_by("-updated_at")
+                .values_list("updated_at", flat=True)
+                .first()
+            )
+            ctx["oplog_sanitation_is_stale"] = bool(
+                latest_entry_update and latest_entry_update > sanitization.sanitized_at
+            )
+            field_labels = {
+                "command": "Command arguments",
+                "recordings": "Recordings",
+                "tags": "Tags",
+                "entry_identifier": "Identifier",
+                "start_date": "Start date",
+                "end_date": "End date",
+                "source_ip": "Source IP",
+                "dest_ip": "Destination IP",
+                "tool": "Tool name",
+                "user_context": "User context",
+                "description": "Description",
+                "output": "Output",
+                "comments": "Comments",
+                "operator_name": "Operator",
+            }
+            field_labels.update(
+                {spec.internal_name: spec.display_name for spec in entry_field_specs}
+            )
+            ctx["oplog_last_sanitization_fields"] = [
+                field_labels.get(field, field) for field in sanitization.fields
+            ]
+        return ctx
+
+
+class OplogCreate(RoleBasedAccessControlMixin, CreateView):
     """
     Create an individual instance of :model:`oplog.Oplog`.
 
@@ -149,16 +595,18 @@ class OplogCreate(LoginRequiredMixin, CreateView):
             # Try to get the project from :model:`rolodex.Project`
             if pk:
                 try:
-                    self.project = get_object_or_404(Project, pk=self.kwargs.get("pk"))
+                    project = get_object_or_404(Project, pk=self.kwargs.get("pk"))
+                    if project.user_can_edit(self.request.user):
+                        self.project = project
                 except Project.DoesNotExist:
                     logger.info(
-                        "Received report create request for Project ID %s, but that Project does not exist",
+                        "Received log create request for project ID %s, but that project does not exist",
                         pk,
                     )
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
-        kwargs.update({"project": self.project})
+        kwargs.update({"project": self.project, "user": self.request.user})
         return kwargs
 
     def get_context_data(self, **kwargs):
@@ -177,39 +625,10 @@ class OplogCreate(LoginRequiredMixin, CreateView):
         if not form.fields["project"].queryset:
             messages.error(
                 self.request,
-                "There are no active projects for a new operation log",
+                "There are no active projects for a new activity log.",
                 extra_tags="alert-error",
             )
         return form
-
-    def form_valid(self, form):
-        # Save the new :model:`oplog.Oplog` instance
-        form.save()
-        messages.success(
-            self.request,
-            "New operation log was successfully created",
-            extra_tags="alert-success",
-        )
-        # Create new API key for this oplog
-        try:
-            project = form.instance.project.id
-            oplog_name = form.instance.name
-            api_key_name = oplog_name
-            api_key, key = APIKey.objects.create_key(name=api_key_name)
-            # Pass the API key via the messages framework
-            messages.info(
-                self.request,
-                f'The logging API key for project { project } and log "{ api_key }" is: { key }\r\nPlease store it somewhere safe: you will not be able to see it again.',
-                extra_tags="api-key no-toast",
-            )
-        except Exception:
-            logger.exception("Failed to create new API key")
-            messages.error(
-                self.request,
-                "Could not generate an API key for your new operation log – contact your admin!",
-                extra_tags="alert-danger",
-            )
-        return super().form_valid(form)
 
     def get_initial(self):
         if self.project:
@@ -226,40 +645,113 @@ class OplogCreate(LoginRequiredMixin, CreateView):
         return reverse("oplog:index")
 
 
-class OplogEntryCreate(LoginRequiredMixin, CreateView):
+class OplogUpdate(RoleBasedAccessControlMixin, UpdateView):
+    """
+    Update an individual :model:`oplog.Oplog`.
+
+    **Template**
+
+    :template:`oplog/oplog_form.html`
+    """
+
+    model = Oplog
+    form_class = OplogForm
+
+    def test_func(self):
+        return self.get_object().user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("oplog:index")
+
+    def get_success_url(self):
+        return reverse("oplog:oplog_entries", args=(self.object.id,))
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["cancel_link"] = reverse(
+            "oplog:oplog_entries", kwargs={"pk": self.object.pk}
+        )
+        return ctx
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs.update({"user": self.request.user})
+        return kwargs
+
+
+class AjaxTemplateMixin:
+    def __init__(self):
+        pass
+
+    def dispatch(self, request, *args, **kwargs):
+        if not hasattr(self, "ajax_template_name"):
+            split = self.template_name.split(".html")
+            split[-1] = "_inner"
+            split.append(".html")
+            self.ajax_template_name = "".join(split)
+        # NOTE: this is JQuery specific
+        if request.META.get("HTTP_X_REQUESTED_WITH") == "XMLHttpRequest":
+            self.template_name = self.ajax_template_name
+        return super().dispatch(request, *args, **kwargs)
+
+
+class OplogEntryCreate(RoleBasedAccessControlMixin, AjaxTemplateMixin, CreateView):
     """
     Create an individual :model:`oplog.OplogEntry`.
 
     **Template**
 
-    :template:`oplog/oplogentry_form.html`
+    :template:`oplog/oplog_modal.html`
     """
 
     model = OplogEntry
     form_class = OplogEntryForm
+    template_name = "oplog/oplogentry_form.html"
+    ajax_template_name = "oplog/snippets/oplogentry_form_inner.html"
+
+    def test_func(self):
+        return OplogEntry.user_can_create(self.request.user, self.get_object())
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("oplog:index")
 
     def get_success_url(self):
         return reverse("oplog:oplog_entries", args=(self.object.oplog_id.id,))
 
+    def get_initial(self):
+        initial = super().get_initial()
+        initial["extra_fields"] = ExtraFieldSpec.initial_json(self.model)
+        return initial
 
-class OplogEntryUpdate(LoginRequiredMixin, UpdateView):
+
+class OplogEntryUpdate(RoleBasedAccessControlMixin, AjaxTemplateMixin, UpdateView):
     """
     Update an individual :model:`oplog.OplogEntry`.
 
     **Template**
 
-    :template:`oplog/oplogentry_form.html`
+    :template:`oplog/oplog_modal.html`
     """
 
     model = OplogEntry
-    fields = "__all__"
+    form_class = OplogEntryForm
+    template_name = "oplog/oplogentry_form.html"
+    ajax_template_name = "oplog/snippets/oplogentry_form_inner.html"
+
+    def test_func(self):
+        return self.get_object().user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("oplog:index")
 
     def get_success_url(self):
-        """Override the function to return to the new record after creation."""
         return reverse("oplog:oplog_entries", args=(self.object.oplog_id.id,))
 
 
-class OplogEntryDelete(LoginRequiredMixin, DeleteView):
+class OplogEntryDelete(RoleBasedAccessControlMixin, DeleteView):
     """
     Delete an individual :model:`oplog.OplogEntry`.
     """
@@ -267,37 +759,646 @@ class OplogEntryDelete(LoginRequiredMixin, DeleteView):
     model = OplogEntry
     fields = "__all__"
 
+    def test_func(self):
+        return self.get_object().user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("oplog:index")
+
     def get_success_url(self):
         return reverse("oplog:oplog_entries", args=(self.object.oplog_id.id,))
 
 
-class OplogEntryViewSet(viewsets.ModelViewSet):
-    serializer_class = OplogEntrySerializer
-    queryset = OplogEntry.objects.all()
-    permission_classes = [HasAPIKey | IsAuthenticated]
+class OplogExport(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Export Oplog entries as CSV, attachment ZIPs, or JSON."""
 
-    def list(self, request):
-        queryset = OplogEntry.objects.all().order_by("-start_date")
-        if "oplog_id" not in self.request.query_params:
-            queryset = OplogEntry.objects.all().order_by("-start_date")
-        else:
-            oplog_id = self.request.query_params["oplog_id"]
-            queryset = OplogEntry.objects.filter(oplog_id=oplog_id).order_by(
-                "-start_date"
-            )
-        if "export" in request.query_params:
-            export_format = request.query_params["export"]
-            dataset = OplogEntryResource().export(queryset)
+    model = Oplog
+    valid_export_formats = {"csv", "json"}
+    valid_include_values = {"recordings", "evidence", "all"}
+    valid_include_output_values = {"", "true", "false"}
+    csv_output_control_escapes = {
+        "\\": r"\\",
+        "\a": r"\a",
+        "\b": r"\b",
+        "\t": r"\t",
+        "\n": r"\n",
+        "\v": r"\v",
+        "\f": r"\f",
+        "\r": r"\r",
+    }
+    attachment_chunk_size = 1024 * 1024
+    recoverable_attachment_errors = (OSError, RuntimeError, TypeError, ValueError)
+    path_lookup_errors = (
+        AttributeError,
+        NotImplementedError,
+        OSError,
+        TypeError,
+        ValueError,
+    )
+    close_errors = (AttributeError, OSError, ValueError)
+
+    def test_func(self):
+        return self.get_object().user_can_view(self.request.user)
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that.")
+        return redirect("oplog:index")
+
+    def _write_file_to_zip(self, zf, field_file, arcname):
+        """Write a storage-backed file into the ZIP without reading the whole file into memory."""
+        try:
+            path = field_file.path
+            if os.path.exists(path):
+                zf.write(path, arcname)
+                return True
+        except self.path_lookup_errors:
+            logger.debug("Unable to access attachment path; falling back to streamed ZIP output.", exc_info=True)
+
+        try:
+            field_file.open("rb")
+            with zf.open(arcname, "w") as zip_member:
+                for chunk in field_file.chunks(self.attachment_chunk_size):
+                    zip_member.write(chunk)
+            return True
+        finally:
             try:
-                return HttpResponse(getattr(dataset, export_format))
-            except AttributeError:
-                return None
+                field_file.close()
+            except self.close_errors:
+                pass
 
-        serializer = OplogEntrySerializer(queryset, many=True)
-        return Response(serializer.data)
+    @staticmethod
+    def _next_arcname(directory, entry_id, basename, used_names):
+        """Generate a unique archive name for an attachment inside the ZIP."""
+        stem, ext = os.path.splitext(basename)
+        for index in count():
+            suffix = "" if index == 0 else f"_{index}"
+            arcname = f"{directory}/{entry_id}_{stem}{suffix}{ext}"
+            if arcname not in used_names:
+                used_names.add(arcname)
+                return arcname
+        raise RuntimeError("Could not generate a unique archive name")
+
+    @staticmethod
+    def _export_filename(export_name, extension):
+        """Return an export filename without duplicating its extension."""
+        suffix = f".{extension}"
+        if export_name.lower().endswith(suffix):
+            return export_name
+        return f"{export_name}{suffix}"
+
+    @classmethod
+    def _sanitize_csv_output(cls, value):
+        """Escape terminal control characters to keep CSV records on one line."""
+        if value is None:
+            return ""
+        return "".join(
+            cls.csv_output_control_escapes.get(
+                character,
+                f"\\x{ord(character):02x}"
+                if ord(character) < 32 or 127 <= ord(character) <= 159
+                else character,
+            )
+            for character in str(value)
+        )
+
+    def _csv_entry_values(self, entry, field_names, attachments_map=None):
+        """Return one CSV row, resolving tags and attachment paths."""
+        attachments = (attachments_map or {}).get(str(entry.id), {})
+        tag_names = ", ".join(tag.name for tag in entry.tags.all())
+        values = []
+        for field in field_names:
+            if field == "oplog_id":
+                values.append(entry.oplog_id.id)
+            elif field == "tags":
+                values.append(tag_names)
+            elif field == "output":
+                values.append(self._sanitize_csv_output(entry.output))
+            elif field in {"recordings", "evidence"}:
+                values.append(", ".join(attachments.get(field, [])))
+            else:
+                values.append(getattr(entry, field))
+        return values
+
+    def _json_payload(self, entries, include_output=False):
+        """Return the field-limited Oplog JSON export payload."""
+        field_mapping = {
+            "command": "command",
+            "description": "description",
+            "destIp": "dest_ip",
+            "endDate": "end_date",
+            "extraFields": "extra_fields",
+            "id": "id",
+            "operatorName": "operator_name",
+            "sourceIp": "source_ip",
+            "startDate": "start_date",
+            "tool": "tool",
+            "updatedAt": "updated_at",
+            "userContext": "user_context",
+        }
+        if include_output:
+            field_mapping["output"] = "output"
+        exported_entries = [
+            {
+                export_name: getattr(entry, model_name)
+                for export_name, model_name in field_mapping.items()
+            }
+            for entry in entries
+        ]
+        return {"data": {"oplog": [{"entries": exported_entries}]}}
+
+    def _json_response(self, obj, entries, include_output=False):
+        """Return the field-limited Oplog JSON export."""
+        response = JsonResponse(self._json_payload(entries, include_output))
+        add_content_disposition_header(
+            response, self._export_filename(obj.get_safe_export_name(), "json")
+        )
+        return response
+
+    def get(self, *args, **kwargs):
+        obj = self.get_object()
+
+        export_format = (self.request.GET.get("format") or "csv").lower()
+        if export_format not in self.valid_export_formats:
+            return HttpResponse(
+                f"Invalid export format: {export_format}",
+                status=400,
+                content_type="text/plain",
+            )
+
+        include_output_param = (self.request.GET.get("include_output") or "").lower()
+        if include_output_param not in self.valid_include_output_values:
+            return HttpResponse(
+                f"Invalid include_output value: {include_output_param}",
+                status=400,
+                content_type="text/plain",
+            )
+        include_output = include_output_param == "true"
+
+        # Determine whether attachments should be included. Accepted values:
+        # - no param / empty: export file only
+        # - include=recordings
+        # - include=evidence
+        # - include=all
+        include_param = (self.request.GET.get("include") or "").lower()
+        include_set = {p.strip() for p in include_param.split(",") if p.strip()}
+        invalid_include_values = include_set - self.valid_include_values
+        if invalid_include_values:
+            invalid_options = ", ".join(sorted(invalid_include_values))
+            return HttpResponse(
+                f"Invalid include value(s): {invalid_options}",
+                status=400,
+                content_type="text/plain",
+            )
+
+        queryset = obj.entries.select_related("recording").prefetch_related(
+            "tags", "evidence_links__evidence"
+        )
+        opts = queryset.model._meta
+
+        # Prepare CSV data into memory (small) for inclusion in ZIP
+        field_names = [field.name for field in opts.fields]
+        if "id" in field_names:
+            field_names.remove("id")
+        if not include_output and "output" in field_names:
+            field_names.remove("output")
+        # Add the tags field to the list of fields
+        if "tags" not in field_names:
+            field_names.append("tags")
+
+        export_name = obj.get_safe_export_name()
+        csv_filename = self._export_filename(export_name, "csv")
+        json_filename = self._export_filename(export_name, "json")
+        zip_json_filename = (
+            "oplog-entries.json"
+            if json_filename.casefold() == "manifest.json"
+            else json_filename
+        )
+
+        # If no attachments were requested, return the selected format directly.
+        if not include_set:
+            if export_format == "json":
+                return self._json_response(obj, queryset, include_output)
+
+            response = HttpResponse(content_type="text/csv")
+            add_content_disposition_header(response, csv_filename)
+            writer = csv.writer(response)
+            writer.writerow(field_names)
+            for entry in queryset:
+                writer.writerow(self._csv_entry_values(entry, field_names))
+            return response
+
+        # Build the ZIP in a spooled temp file so small exports stay in memory and
+        # larger ones spill to disk without buffering every attachment in RAM.
+        # Do not wrap this in ``with``: FileResponse needs the file handle to remain
+        # open after this method returns so Django can stream it to the client.
+        tmp = tempfile.SpooledTemporaryFile(max_size=50 * 1024 * 1024, mode="w+b")
+        manifest = {"generated_at": datetime.utcnow().isoformat() + "Z", "entries": {}}
+        attachments_map = {}
+        used_archive_names = set()
+        try:
+            with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                # First pass: collect and add attachment files, record filenames per entry
+                for entry in queryset:
+                    attachments_map[str(entry.id)] = {"recordings": [], "evidence": []}
+                    # Recordings
+                    if "recordings" in include_set or "all" in include_set:
+                        try:
+                            rec = entry.recording
+                            if rec.recording_file:
+                                fname = os.path.basename(rec.recording_file.name)
+                                arcname = self._next_arcname(
+                                    "recordings", entry.id, fname, used_archive_names
+                                )
+                                try:
+                                    self._write_file_to_zip(
+                                        zf, rec.recording_file, arcname
+                                    )
+                                except self.recoverable_attachment_errors:
+                                    logger.exception(
+                                        "Could not include recording for entry %s",
+                                        entry.id,
+                                    )
+                                    continue
+                                attachments_map[str(entry.id)]["recordings"].append(
+                                    arcname
+                                )
+                        except OplogEntryRecording.DoesNotExist:
+                            logger.debug("Oplog entry %s has no recording to export.", entry.id, exc_info=True)
+
+                    # Evidence files
+                    if "evidence" in include_set or "all" in include_set:
+                        links = entry.evidence_links.all()
+                        for link in links:
+                            ev = link.evidence
+                            if ev.document:
+                                fname = os.path.basename(ev.document.name)
+                                arcname = self._next_arcname(
+                                    "evidence", entry.id, fname, used_archive_names
+                                )
+                                try:
+                                    self._write_file_to_zip(zf, ev.document, arcname)
+                                except self.recoverable_attachment_errors:
+                                    logger.exception(
+                                        "Could not include evidence %s for entry %s",
+                                        getattr(ev, "pk", "?"),
+                                        entry.id,
+                                    )
+                                    continue
+                                attachments_map[str(entry.id)]["evidence"].append(
+                                    arcname
+                                )
+
+                    if (
+                        attachments_map[str(entry.id)]["recordings"]
+                        or attachments_map[str(entry.id)]["evidence"]
+                    ):
+                        manifest["entries"][str(entry.id)] = {
+                            "recordings": attachments_map[str(entry.id)]["recordings"],
+                            "evidence": attachments_map[str(entry.id)]["evidence"],
+                        }
+
+                if export_format == "json":
+                    zf.writestr(
+                        zip_json_filename,
+                        JsonResponse(self._json_payload(queryset, include_output)).content,
+                    )
+                else:
+                    # Extend field_names with attachment columns when relevant.
+                    if "recordings" in include_set or "all" in include_set:
+                        if "recordings" not in field_names:
+                            field_names.append("recordings")
+                    if "evidence" in include_set or "all" in include_set:
+                        if "evidence" not in field_names:
+                            field_names.append("evidence")
+
+                    csv_buf = io.StringIO()
+                    csv_writer = csv.writer(csv_buf)
+                    csv_writer.writerow(field_names)
+                    for entry in queryset:
+                        csv_writer.writerow(
+                            self._csv_entry_values(
+                                entry, field_names, attachments_map
+                            )
+                        )
+                    zf.writestr(csv_filename, csv_buf.getvalue().encode("utf-8"))
+
+                # Add manifest.json for mapping and metadata
+                zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+
+            # Rewind temp file and return it as a response body
+            tmp.seek(0)
+            zip_name = f"{export_name}_attachments.zip"
+            response = FileResponse(
+                tmp,
+                as_attachment=True,
+                filename=zip_name,
+                content_type="application/zip",
+            )
+            return response
+        except Exception:
+            logger.exception("Failed while creating ZIP export for oplog %s", obj.id)
+            tmp.close()
+            raise
 
 
-class OplogViewSet(viewsets.ModelViewSet):
-    queryset = Oplog.objects.all()
-    serializer_class = OplogSerializer
-    permission_classes = [HasAPIKey | IsAuthenticated]
+class OplogEvidenceCreate(RoleBasedAccessControlMixin, View):
+    """
+    Upload an :model:`reporting.Evidence` file and link it to an :model:`oplog.OplogEntry`
+    via an :model:`oplog.OplogEntryEvidence`.
+
+    Returns form HTML on GET (for AJAX modal), JSON response on POST.
+    """
+
+    def get_entry(self):
+        return get_object_or_404(OplogEntry, pk=self.kwargs["pk"])
+
+    def test_func(self):
+        return self.get_entry().user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return JsonResponse(
+            {
+                "result": "error",
+                "message": "You do not have permission to access that.",
+            },
+            status=403,
+        )
+
+    def get(self, request, *args, **kwargs):
+        entry = self.get_entry()
+        project = entry.oplog_id.project
+        active_report_id = None
+        try:
+            active = request.session.get("active_report") or {}
+            active_report_id = int(active.get("id", 0)) or None
+        except (TypeError, ValueError, AttributeError):
+            active_report_id = None
+        form = OplogEvidenceForm(project=project, active_report_id=active_report_id)
+        form.helper.form_action = reverse(
+            "oplog:oplog_entry_evidence_upload", kwargs={"pk": entry.pk}
+        )
+        return render(
+            request, "oplog/snippets/oplog_evidence_form_inner.html", {"form": form}
+        )
+
+    def post(self, request, *args, **kwargs):
+        entry = self.get_entry()
+        project = entry.oplog_id.project
+        form = OplogEvidenceForm(request.POST, request.FILES, project=project)
+        if form.is_valid():
+            with transaction.atomic():
+                evidence = form.save(commit=False)
+                evidence.uploaded_by = request.user
+                evidence.save()
+                form.save_m2m()
+                OplogEntryEvidence.objects.create(oplog_entry=entry, evidence=evidence)
+            return JsonResponse(
+                {
+                    "result": "success",
+                    "evidence_id": evidence.pk,
+                    "friendly_name": evidence.friendly_name,
+                }
+            )
+        # Return the form with errors for re-rendering in the modal
+        form.helper.form_action = reverse(
+            "oplog:oplog_entry_evidence_upload", kwargs={"pk": entry.pk}
+        )
+        return render(
+            request, "oplog/snippets/oplog_evidence_form_inner.html", {"form": form}
+        )
+
+
+class OplogEntryEvidenceList(RoleBasedAccessControlMixin, View):
+    """Return a JSON list of :model:`reporting.Evidence` linked to an :model:`oplog.OplogEntry`."""
+
+    def get_entry(self):
+        return get_object_or_404(OplogEntry, pk=self.kwargs["pk"])
+
+    def test_func(self):
+        return self.get_entry().user_can_view(self.request.user)
+
+    def handle_no_permission(self):
+        return JsonResponse(
+            {
+                "result": "error",
+                "message": "You do not have permission to access that.",
+            },
+            status=403,
+        )
+
+    def get(self, request, *args, **kwargs):
+        entry = self.get_entry()
+        links = entry.evidence_links.select_related(
+            "evidence", "evidence__uploaded_by"
+        ).all()
+        evidence_list = []
+        for link in links:
+            ev = link.evidence
+            evidence_list.append(
+                {
+                    "id": ev.pk,
+                    "friendly_name": ev.friendly_name,
+                    "caption": ev.caption,
+                    "document_url": reverse(
+                        "reporting:evidence_download", kwargs={"pk": ev.pk}
+                    )
+                    + "?view=1"
+                    if ev.document
+                    else "",
+                    "filename": ev.document.name.split("/")[-1] if ev.document else "",
+                    "link_id": link.pk,
+                    "uploaded_by_user": ev.uploaded_by_user,
+                }
+            )
+        return JsonResponse({"result": "success", "evidence": evidence_list})
+
+
+class OplogRecordingUpload(RoleBasedAccessControlMixin, View):
+    """
+    Upload or replace the Asciinema terminal recording for an :model:`oplog.OplogEntry`.
+
+    Returns a JSON response.
+    """
+
+    def get_entry(self):
+        return get_object_or_404(OplogEntry, pk=self.kwargs["pk"])
+
+    def test_func(self):
+        return self.get_entry().user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return JsonResponse(
+            {
+                "result": "error",
+                "message": "You do not have permission to access that.",
+            },
+            status=403,
+        )
+
+    def post(self, request, *args, **kwargs):
+        entry = self.get_entry()
+        recording_file = request.FILES.get("recording_file")
+        if not recording_file:
+            return JsonResponse(
+                {"result": "error", "message": "No file provided."}, status=400
+            )
+        filename_lower = recording_file.name.lower()
+        if not (
+            filename_lower.endswith(".cast") or filename_lower.endswith(".cast.gz")
+        ):
+            return JsonResponse(
+                {
+                    "result": "error",
+                    "message": "Only .cast and .cast.gz files are accepted.",
+                },
+                status=400,
+            )
+        if recording_file.size > settings.GHOSTWRITER_MAX_FILE_SIZE:
+            return JsonResponse(
+                {"result": "error", "message": "The recording file is too large."},
+                status=413,
+            )
+        if filename_lower.endswith(".cast.gz"):
+            error_message, error_status = validate_cast_gzip_upload(recording_file)
+            if error_message:
+                return JsonResponse(
+                    {"result": "error", "message": error_message}, status=error_status
+                )
+
+        # Update an existing recording in place when possible so a failed replacement
+        # does not delete the current attachment before the new file is safely saved.
+        try:
+            recording = entry.recording
+        except OplogEntryRecording.DoesNotExist:
+            recording = OplogEntryRecording(oplog_entry=entry)
+
+        old_recording_name = ""
+        old_recording_storage = None
+        if recording.pk and recording.recording_file:
+            # Keep a handle to the previous file and only delete it after the new save
+            # commits successfully. This avoids data loss on transient upload failures.
+            old_recording_name = recording.recording_file.name
+            old_recording_storage = recording.recording_file.storage
+
+        # Extract searchable text from a bounded prefix of the cast file before saving.
+        # The upload itself is still stored in full; only the search-text extraction is capped.
+        file_content = recording_file.read(get_cast_parse_input_bytes() + 1)
+        recording_file.seek(0)
+        recording_text, text_warning = extract_cast_text(file_content)
+
+        recording.uploaded_by = request.user
+        recording.recording_file = recording_file
+        recording.recording_text = recording_text
+        with transaction.atomic():
+            recording.save()
+            if (
+                old_recording_name
+                and old_recording_name != recording.recording_file.name
+            ):
+                # Delay file deletion until after commit so the old recording remains
+                # available if saving the replacement raises or the transaction rolls back.
+                transaction.on_commit(
+                    lambda: old_recording_storage.delete(old_recording_name)
+                )
+        response = {
+            "result": "success",
+            "recording_url": reverse(
+                "oplog:oplog_entry_recording_download", kwargs={"pk": recording.pk}
+            ),
+        }
+        if text_warning:
+            response["warning"] = text_warning
+        return JsonResponse(response)
+
+
+class OplogRecordingDelete(RoleBasedAccessControlMixin, View):
+    """Delete the Asciinema terminal recording for an :model:`oplog.OplogEntry`."""
+
+    def get_entry(self):
+        return get_object_or_404(OplogEntry, pk=self.kwargs["pk"])
+
+    def test_func(self):
+        return self.get_entry().user_can_edit(self.request.user)
+
+    def handle_no_permission(self):
+        return JsonResponse(
+            {
+                "result": "error",
+                "message": "You do not have permission to access that.",
+            },
+            status=403,
+        )
+
+    def post(self, request, *args, **kwargs):
+        entry = self.get_entry()
+        try:
+            entry.recording.delete()
+            logger.info(
+                "Deleted recording for %s %s by request of %s",
+                entry.__class__.__name__,
+                entry.id,
+                self.request.user,
+            )
+            return JsonResponse({"result": "success"})
+        except OplogEntryRecording.DoesNotExist:
+            return JsonResponse(
+                {"result": "error", "message": "No recording found."}, status=404
+            )
+
+
+class OplogRecordingDownload(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Serve the Asciinema recording file for an :model:`oplog.OplogEntryRecording`."""
+
+    model = OplogEntryRecording
+
+    def test_func(self):
+        return self.get_object().user_can_view(self.request.user)
+
+    def handle_no_permission(self):
+        return JsonResponse(
+            {
+                "result": "error",
+                "message": "You do not have permission to access that.",
+            },
+            status=403,
+        )
+
+    def get(self, request, *args, **kwargs):
+        recording = self.get_object()
+        file_path = recording.recording_file.path
+        if os.path.exists(file_path):
+            # Detect the content type
+            content_type, _ = mimetypes.guess_type(file_path)
+            if content_type is None:
+                content_type = "application/octet-stream"
+
+            # Check if inline viewing is explicitly requested via query parameter
+            # Default to download (as_attachment=True) for security
+            inline_view = request.GET.get("view", "").lower() in ("1", "true", "yes")
+
+            # Check if file is gzipped - if so, serve with Content-Encoding: gzip
+            # so the browser decompresses it for the Asciinema player
+            is_gzipped = file_path.lower().endswith(".gz")
+
+            response = FileResponse(
+                open(file_path, "rb"),
+                as_attachment=not inline_view,
+                filename=recording.filename,
+                content_type=content_type,
+            )
+
+            # Add security headers to mitigate XSS risks
+            response["X-Content-Type-Options"] = "nosniff"
+            if inline_view:
+                # Additional hardening for inline content
+                response[
+                    "Content-Security-Policy"
+                ] = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'"
+
+            # For gzipped files, add Content-Encoding header so browser decompresses
+            if is_gzipped:
+                response["Content-Encoding"] = "gzip"
+
+            return response
+        raise Http404

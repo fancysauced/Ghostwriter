@@ -1,8 +1,10 @@
 # Standard Libraries
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import patch
 
 # Django Imports
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 # Ghostwriter Libraries
@@ -11,10 +13,15 @@ from ghostwriter.factories import (
     ClientFactory,
     ClientInviteFactory,
     ClientNoteFactory,
+    DeconflictionFactory,
+    DeconflictionStatusFactory,
     HistoryFactory,
     ObjectivePriorityFactory,
     ObjectiveStatusFactory,
+    OplogEntryFactory,
+    OplogFactory,
     ProjectAssignmentFactory,
+    ProjectContactFactory,
     ProjectFactory,
     ProjectInviteFactory,
     ProjectNoteFactory,
@@ -28,7 +35,10 @@ from ghostwriter.factories import (
     ReportFindingLinkFactory,
     ServerHistoryFactory,
     UserFactory,
+    WhiteCardFactory,
 )
+from ghostwriter.rolodex.admin import ProjectRoleAdminForm
+from ghostwriter.rolodex.models import Client, Project
 
 logging.disable(logging.CRITICAL)
 
@@ -47,18 +57,10 @@ class ClientModelTests(TestCase):
         # Read
         self.assertEqual(client.name, "SpecterOps, Inc.")
         self.assertEqual(client.pk, client.id)
-        self.assertQuerysetEqual(
-            self.Client.objects.all(),
-            ["<Client: SpecterOps, Inc.>"],
-        )
 
         # Update
         client.name = "Kabletown"
         client.save()
-        self.assertQuerysetEqual(
-            self.Client.objects.all(),
-            ["<Client: Kabletown>"],
-        )
 
         # Delete
         client.delete()
@@ -68,8 +70,43 @@ class ClientModelTests(TestCase):
         client = ClientFactory(name="SpecterOps, Inc.")
         try:
             client.get_absolute_url()
-        except:
+        except Exception:
             self.fail("Client.get_absolute_url() raised an exception")
+
+    def test_access(self):
+        client: Client = ClientFactory(name="SpecterOps, Inc.")
+        user = UserFactory(password="SuperNaturalReporting!")
+
+        self.assertFalse(Client.user_can_create(user))
+        self.assertFalse(client.user_can_view(user))
+        self.assertFalse(client.user_can_edit(user))
+        self.assertFalse(client.user_can_delete(user))
+
+        user.role = "manager"
+        user.save()
+        self.assertTrue(Client.user_can_create(user))
+        self.assertTrue(client.user_can_view(user))
+        self.assertTrue(client.user_can_edit(user))
+        self.assertTrue(client.user_can_delete(user))
+
+        user.role = "user"
+        user.save()
+        self.assertFalse(Client.user_can_create(user))
+        self.assertFalse(client.user_can_view(user))
+        self.assertFalse(client.user_can_edit(user))
+        self.assertFalse(client.user_can_delete(user))
+
+        client_invite = ClientInviteFactory(user=user, client=client)
+        self.assertFalse(Client.user_can_create(user))
+        self.assertTrue(client.user_can_view(user))
+        self.assertTrue(client.user_can_edit(user))
+        self.assertTrue(client.user_can_delete(user))
+
+        client_invite.delete()
+        self.assertFalse(Client.user_can_create(user))
+        self.assertFalse(client.user_can_view(user))
+        self.assertFalse(client.user_can_edit(user))
+        self.assertFalse(client.user_can_delete(user))
 
 
 class ClientContactModelTests(TestCase):
@@ -81,27 +118,27 @@ class ClientContactModelTests(TestCase):
 
     def test_crud_finding(self):
         # Create
-        client = ClientContactFactory(name="David")
+        contact = ClientContactFactory(name="David")
 
         # Read
-        self.assertEqual(client.name, "David")
-        self.assertEqual(client.pk, client.id)
-        self.assertQuerysetEqual(
-            self.ClientContact.objects.all(),
-            [f"<ClientContact: {client.name} ({client.client})>"],
-        )
+        self.assertEqual(contact.name, "David")
+        self.assertEqual(contact.pk, contact.id)
 
         # Update
-        client.name = "Kabletown"
-        client.save()
-        self.assertQuerysetEqual(
-            self.ClientContact.objects.all(),
-            [f"<ClientContact: {client.name} ({client.client})>"],
-        )
+        contact.name = "Jason"
+        contact.save()
 
         # Delete
-        client.delete()
+        contact.delete()
         assert not self.ClientContact.objects.all().exists()
+
+    def test_primary_defaults_to_false(self):
+        contact = ClientContactFactory()
+        self.assertFalse(contact.primary)
+
+    def test_primary_can_be_set(self):
+        contact = ClientContactFactory(primary=True)
+        self.assertTrue(contact.primary)
 
 
 class ProjectTypeModelTests(TestCase):
@@ -118,18 +155,10 @@ class ProjectTypeModelTests(TestCase):
         # Read
         self.assertEqual(project_type.project_type, "Red Team")
         self.assertEqual(project_type.pk, project_type.id)
-        self.assertQuerysetEqual(
-            self.ProjectType.objects.all(),
-            ["<ProjectType: Red Team>"],
-        )
 
         # Update
         project_type.project_type = "Penetration Test"
         project_type.save()
-        self.assertQuerysetEqual(
-            self.ProjectType.objects.all(),
-            ["<ProjectType: Penetration Test>"],
-        )
 
         # Delete
         project_type.delete()
@@ -150,22 +179,10 @@ class ProjectModelTests(TestCase):
         # Read
         self.assertEqual(project.codename, "S3kr3t Codename")
         self.assertEqual(project.pk, project.id)
-        self.assertQuerysetEqual(
-            self.Project.objects.all(),
-            [
-                f"<Project: {project.start_date} {project.client} {project.project_type} (S3kr3t Codename)>"
-            ],
-        )
 
         # Update
         project.codename = "New Name"
         project.save()
-        self.assertQuerysetEqual(
-            self.Project.objects.all(),
-            [
-                f"<Project: {project.start_date} {project.client} {project.project_type} (New Name)>"
-            ],
-        )
 
         # Delete
         project.delete()
@@ -175,8 +192,25 @@ class ProjectModelTests(TestCase):
         project = ProjectFactory()
         try:
             project.get_absolute_url()
-        except:
+        except Exception:
             self.fail("Project.get_absolute_url() raised an exception")
+
+    def test_lifecycle_status_is_derived_from_dates_and_completion(self):
+        project = ProjectFactory(complete=False)
+        today = date(2026, 9, 10)
+
+        project.start_date = today + timedelta(days=1)
+        project.end_date = today + timedelta(days=5)
+        self.assertEqual(project.get_lifecycle_status(today), "Upcoming")
+
+        project.start_date = today - timedelta(days=1)
+        self.assertEqual(project.get_lifecycle_status(today), "In Progress")
+
+        project.end_date = today - timedelta(days=1)
+        self.assertEqual(project.get_lifecycle_status(today), "Awaiting Completion")
+
+        project.complete = True
+        self.assertEqual(project.get_lifecycle_status(today), "Complete")
 
     def test_checkout_adjustment_signal(self):
         yesterday = date.today() - timedelta(days=1)
@@ -186,18 +220,12 @@ class ProjectModelTests(TestCase):
             end_date=date.today() + timedelta(days=14),
         )
 
-        domain_checkout = HistoryFactory(
-            start_date=project.start_date, end_date=project.end_date, project=project
-        )
-        exp_domain_checkout = HistoryFactory(
-            start_date=project.start_date, end_date=yesterday, project=project
-        )
+        domain_checkout = HistoryFactory(start_date=project.start_date, end_date=project.end_date, project=project)
+        exp_domain_checkout = HistoryFactory(start_date=project.start_date, end_date=yesterday, project=project)
         server_checkout = ServerHistoryFactory(
             start_date=project.start_date, end_date=project.end_date, project=project
         )
-        exp_server_checkout = ServerHistoryFactory(
-            start_date=project.start_date, end_date=yesterday, project=project
-        )
+        exp_server_checkout = ServerHistoryFactory(start_date=project.start_date, end_date=yesterday, project=project)
 
         new_start = project.start_date - timedelta(days=7)
         new_end = project.end_date + timedelta(days=7)
@@ -221,9 +249,81 @@ class ProjectModelTests(TestCase):
     def test_prop_count_findings(self):
         project = ProjectFactory()
         report = ReportFactory(project=project)
-        for x in range(3):
+        for _ in range(3):
             ReportFindingLinkFactory(report=report)
         self.assertEqual(project.count_findings(), 3)
+
+    def test_update_project_signal(self):
+        project = ProjectFactory(slack_channel="")
+        project.end_date = project.end_date + timedelta(days=1)
+        project.save()
+        project.slack_channel = "#testing"
+        project.save()
+        project.slack_channel = ""
+        project.save()
+
+    def test_access(self):
+        project: Project = ProjectFactory()
+        user = UserFactory(password="SuperNaturalReporting!")
+
+        self.assertFalse(Project.user_can_create(user))
+        self.assertFalse(project.user_can_view(user))
+        self.assertFalse(project.user_can_edit(user))
+        self.assertFalse(project.user_can_delete(user))
+
+        user.role = "manager"
+        user.save()
+        self.assertTrue(Project.user_can_create(user))
+        self.assertTrue(project.user_can_view(user))
+        self.assertTrue(project.user_can_edit(user))
+        self.assertTrue(project.user_can_delete(user))
+
+        user.role = "user"
+        user.save()
+        self.assertFalse(Project.user_can_create(user))
+        self.assertFalse(project.user_can_view(user))
+        self.assertFalse(project.user_can_edit(user))
+        self.assertFalse(project.user_can_delete(user))
+
+        assignment = ProjectAssignmentFactory(operator=user, project=project)
+        self.assertFalse(Project.user_can_create(user))
+        self.assertTrue(project.user_can_view(user))
+        self.assertTrue(project.user_can_edit(user))
+        self.assertTrue(project.user_can_delete(user))
+
+        assignment.delete()
+        self.assertFalse(Project.user_can_create(user))
+        self.assertFalse(project.user_can_view(user))
+        self.assertFalse(project.user_can_edit(user))
+        self.assertFalse(project.user_can_delete(user))
+
+        client_invite = ClientInviteFactory(user=user, client=project.client)
+        self.assertFalse(Project.user_can_create(user))
+        self.assertTrue(project.user_can_view(user))
+        self.assertTrue(project.user_can_edit(user))
+        self.assertTrue(project.user_can_delete(user))
+
+        client_invite.delete()
+        self.assertFalse(Project.user_can_create(user))
+        self.assertFalse(project.user_can_view(user))
+        self.assertFalse(project.user_can_edit(user))
+        self.assertFalse(project.user_can_delete(user))
+
+    def test_user_editable_queryset_matches_instance_edit_access(self):
+        project = ProjectFactory()
+        user = UserFactory(password="SuperNaturalReporting!")
+
+        self.assertNotIn(project, Project.user_editable(user))
+
+        assignment = ProjectAssignmentFactory(operator=user, project=project)
+        self.assertIn(project, Project.user_editable(user))
+
+        assignment.delete()
+        self.assertNotIn(project, Project.user_editable(user))
+
+        user.role = "manager"
+        user.save()
+        self.assertIn(project, Project.user_editable(user))
 
 
 class ProjectRoleModelTests(TestCase):
@@ -235,27 +335,126 @@ class ProjectRoleModelTests(TestCase):
 
     def test_crud_finding(self):
         # Create
-        project_role = ProjectRoleFactory(project_role="Lead")
+        project_role = ProjectRoleFactory(project_role="Lead", position=1)
 
         # Read
         self.assertEqual(project_role.project_role, "Lead")
+        self.assertEqual(project_role.position, 1)
         self.assertEqual(project_role.pk, project_role.id)
-        self.assertQuerysetEqual(
-            self.ProjectRole.objects.all(),
-            ["<ProjectRole: Lead>"],
-        )
 
         # Update
         project_role.project_role = "Operator"
         project_role.save()
-        self.assertQuerysetEqual(
-            self.ProjectRole.objects.all(),
-            ["<ProjectRole: Operator>"],
-        )
 
         # Delete
         project_role.delete()
         assert not self.ProjectRole.objects.all().exists()
+
+    def test_inserting_role_at_existing_position_shifts_following_roles(self):
+        ProjectRoleFactory(project_role="Lead", position=1)
+        ProjectRoleFactory(project_role="QA", position=2)
+        new_role = ProjectRoleFactory(project_role="Operator", position=2)
+
+        self.assertEqual(
+            list(self.ProjectRole.objects.values_list("project_role", "position")),
+            [("Lead", 1), ("Operator", 2), ("QA", 3)],
+        )
+        self.assertEqual(new_role.position, 2)
+
+    def test_moving_role_to_earlier_position_shifts_intervening_roles(self):
+        lead = ProjectRoleFactory(project_role="Lead", position=1)
+        qa = ProjectRoleFactory(project_role="QA", position=2)
+        operator = ProjectRoleFactory(project_role="Operator", position=3)
+
+        operator.position = 1
+        operator.save()
+
+        lead.refresh_from_db()
+        qa.refresh_from_db()
+        operator.refresh_from_db()
+
+        self.assertEqual(
+            [
+                (lead.project_role, lead.position),
+                (qa.project_role, qa.position),
+                (operator.project_role, operator.position),
+            ],
+            [("Lead", 2), ("QA", 3), ("Operator", 1)],
+        )
+
+    def test_moving_role_to_later_position_shifts_intervening_roles(self):
+        lead = ProjectRoleFactory(project_role="Lead", position=1)
+        qa = ProjectRoleFactory(project_role="QA", position=2)
+        operator = ProjectRoleFactory(project_role="Operator", position=3)
+
+        lead.position = 3
+        lead.save()
+
+        lead.refresh_from_db()
+        qa.refresh_from_db()
+        operator.refresh_from_db()
+
+        self.assertEqual(
+            [
+                (lead.project_role, lead.position),
+                (qa.project_role, qa.position),
+                (operator.project_role, operator.position),
+            ],
+            [("Lead", 3), ("QA", 1), ("Operator", 2)],
+        )
+
+    def test_deleting_role_closes_position_gap(self):
+        lead = ProjectRoleFactory(project_role="Lead", position=1)
+        qa = ProjectRoleFactory(project_role="QA", position=2)
+        operator = ProjectRoleFactory(project_role="Operator", position=3)
+
+        qa.delete()
+
+        lead.refresh_from_db()
+        operator.refresh_from_db()
+
+        self.assertEqual(
+            list(self.ProjectRole.objects.values_list("project_role", "position")),
+            [("Lead", 1), ("Operator", 2)],
+        )
+
+    def test_position_must_be_greater_than_zero(self):
+        project_role = self.ProjectRole(project_role="Lead", position=0)
+
+        with self.assertRaises(ValidationError):
+            project_role.full_clean()
+
+    def test_admin_form_allows_taken_position_for_reordering(self):
+        lead = ProjectRoleFactory(project_role="Lead", position=1)
+        operator = ProjectRoleFactory(project_role="Operator", position=2)
+
+        form = ProjectRoleAdminForm(
+            data={"project_role": operator.project_role, "position": 1},
+            instance=operator,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+
+        form.save()
+        lead.refresh_from_db()
+        operator.refresh_from_db()
+
+        self.assertEqual(lead.position, 2)
+        self.assertEqual(operator.position, 1)
+
+    def test_save_acquires_advisory_lock(self):
+        with patch.object(self.ProjectRole, "_acquire_reorder_lock") as lock_mock:
+            ProjectRoleFactory(project_role="Lead", position=1)
+
+        lock_mock.assert_called_once()
+
+    def test_delete_acquires_advisory_lock(self):
+        role = ProjectRoleFactory(project_role="Lead", position=1)
+
+        with patch.object(self.ProjectRole, "_acquire_reorder_lock") as lock_mock:
+            role.delete()
+
+        lock_mock.assert_called_once()
 
 
 class ProjectAssignmentModelTests(TestCase):
@@ -274,26 +473,40 @@ class ProjectAssignmentModelTests(TestCase):
         # Read
         self.assertEqual(assignment.operator, self.user)
         self.assertEqual(assignment.pk, assignment.id)
-        self.assertQuerysetEqual(
-            self.ProjectAssignment.objects.all(),
-            [
-                f"<ProjectAssignment: {self.user} - {assignment.project} {assignment.end_date})>"
-            ],
-        )
 
         # Update
         assignment.operator = self.new_user
         assignment.save()
-        self.assertQuerysetEqual(
-            self.ProjectAssignment.objects.all(),
-            [
-                f"<ProjectAssignment: {self.new_user} - {assignment.project} {assignment.end_date})>"
-            ],
-        )
 
         # Delete
         assignment.delete()
         assert not self.ProjectAssignment.objects.all().exists()
+
+    def test_assignments_are_ordered_by_role_position_then_operator_name(self):
+        project = ProjectFactory()
+        lead_role = ProjectRoleFactory(project_role="Lead", position=1)
+        operator_role = ProjectRoleFactory(project_role="Operator", position=2)
+
+        zed = UserFactory(name="Zed Zebra")
+        amy = UserFactory(name="Amy Adams")
+        beth = UserFactory(name="Beth Baker")
+
+        ProjectAssignmentFactory(project=project, role=operator_role, operator=zed)
+        ProjectAssignmentFactory(project=project, role=lead_role, operator=beth)
+        ProjectAssignmentFactory(project=project, role=lead_role, operator=amy)
+
+        self.assertEqual(
+            list(
+                self.ProjectAssignment.objects.filter(project=project).values_list(
+                    "operator__name", "role__project_role"
+                )
+            ),
+            [
+                ("Amy Adams", "Lead"),
+                ("Beth Baker", "Lead"),
+                ("Zed Zebra", "Operator"),
+            ],
+        )
 
 
 class ObjectiveStatusModelTests(TestCase):
@@ -310,18 +523,10 @@ class ObjectiveStatusModelTests(TestCase):
         # Read
         self.assertEqual(status.objective_status, "In Progress")
         self.assertEqual(status.pk, status.id)
-        self.assertQuerysetEqual(
-            self.ObjectiveStatus.objects.all(),
-            ["<ObjectiveStatus: In Progress>"],
-        )
 
         # Update
         status.objective_status = "Done"
         status.save()
-        self.assertQuerysetEqual(
-            self.ObjectiveStatus.objects.all(),
-            ["<ObjectiveStatus: Done>"],
-        )
 
         # Delete
         status.delete()
@@ -342,18 +547,10 @@ class ObjectivePriorityModelTests(TestCase):
         # Read
         self.assertEqual(priority.priority, "Primary")
         self.assertEqual(priority.pk, priority.id)
-        self.assertQuerysetEqual(
-            self.ObjectivePriority.objects.all(),
-            ["<ObjectivePriority: Primary>"],
-        )
 
         # Update
         priority.priority = "Secondary"
         priority.save()
-        self.assertQuerysetEqual(
-            self.ObjectivePriority.objects.all(),
-            ["<ObjectivePriority: Secondary>"],
-        )
 
         # Delete
         priority.delete()
@@ -375,18 +572,10 @@ class ProjectObjectiveModelTests(TestCase):
         # Read
         self.assertEqual(obj.objective, "Get DA")
         self.assertEqual(obj.pk, obj.id)
-        self.assertQuerysetEqual(
-            self.ProjectObjective.objects.all(),
-            [f"<ProjectObjective: {obj.project} - Get DA {obj.status})>"],
-        )
 
         # Update
         obj.objective = "Access git"
         obj.save()
-        self.assertQuerysetEqual(
-            self.ProjectObjective.objects.all(),
-            [f"<ProjectObjective: {obj.project} - Access git {obj.status})>"],
-        )
 
         # Delete
         obj.delete()
@@ -408,9 +597,7 @@ class ProjectObjectiveModelTests(TestCase):
             status = obj.calculate_status()
             self.assertEqual(100.0, status)
         except Exception:
-            self.fail(
-                "ProjectObjective model `calculate_status` method failed unexpectedly!"
-            )
+            self.fail("ProjectObjective model `calculate_status` method failed unexpectedly!")
 
 
 class ProjectSubTaskModelTests(TestCase):
@@ -428,20 +615,10 @@ class ProjectSubTaskModelTests(TestCase):
         # Read
         self.assertEqual(task.task, "Get an account")
         self.assertEqual(task.pk, task.id)
-        self.assertQuerysetEqual(
-            self.ProjectSubtask.objects.all(),
-            [f"<ProjectSubTask: {task.parent.project} : Get an account ({task.status})>"],
-        )
 
         # Update
         task.task = "Compromise an account"
         task.save()
-        self.assertQuerysetEqual(
-            self.ProjectSubtask.objects.all(),
-            [
-                f"<ProjectSubTask: {task.parent.project} : Compromise an account ({task.status})>"
-            ],
-        )
 
         # Delete
         task.delete()
@@ -462,18 +639,10 @@ class ClientNoteModelTests(TestCase):
         # Read
         self.assertEqual(note.note, "Client note")
         self.assertEqual(note.pk, note.id)
-        self.assertQuerysetEqual(
-            self.ClientNote.objects.all(),
-            [f"<ClientNote: {note.client}: {note.timestamp} - Client note>"],
-        )
 
         # Update
         note.note = "Updated note"
         note.save()
-        self.assertQuerysetEqual(
-            self.ClientNote.objects.all(),
-            [f"<ClientNote: {note.client}: {note.timestamp} - Updated note>"],
-        )
 
         # Delete
         note.delete()
@@ -494,18 +663,10 @@ class ProjectNoteModelTests(TestCase):
         # Read
         self.assertEqual(note.note, "Project note")
         self.assertEqual(note.pk, note.id)
-        self.assertQuerysetEqual(
-            self.ProjectNote.objects.all(),
-            [f"<ProjectNote: {note.project}: {note.timestamp} - Project note>"],
-        )
 
         # Update
         note.note = "Updated note"
         note.save()
-        self.assertQuerysetEqual(
-            self.ProjectNote.objects.all(),
-            [f"<ProjectNote: {note.project}: {note.timestamp} - Updated note>"],
-        )
 
         # Delete
         note.delete()
@@ -526,18 +687,10 @@ class ProjectScopeModelTests(TestCase):
         # Read
         self.assertEqual(scope.name, "CDE")
         self.assertEqual(scope.pk, scope.id)
-        self.assertQuerysetEqual(
-            self.ProjectScope.objects.all(),
-            [f"<ProjectScope: {scope.project}: CDE>"],
-        )
 
         # Update
         scope.name = "Mainframes"
         scope.save()
-        self.assertQuerysetEqual(
-            self.ProjectScope.objects.all(),
-            [f"<ProjectScope: {scope.project}: Mainframes>"],
-        )
 
         # Delete
         scope.delete()
@@ -581,22 +734,28 @@ class ProjectTargetModelTests(TestCase):
         # Read
         self.assertEqual(target.ip_address, "1.1.1.1")
         self.assertEqual(target.pk, target.id)
-        self.assertQuerysetEqual(
-            self.ProjectTarget.objects.all(),
-            [f"<ProjectTarget: {target.hostname} (1.1.1.1)>"],
-        )
 
         # Update
         target.ip_address = "1.1.1.2"
         target.save()
-        self.assertQuerysetEqual(
-            self.ProjectTarget.objects.all(),
-            [f"<ProjectTarget: {target.hostname} (1.1.1.2)>"],
-        )
 
         # Delete
         target.delete()
         assert not self.ProjectTarget.objects.all().exists()
+
+    def test_invalid_ip(self):
+        project = ProjectFactory()
+        with self.assertRaises(ValidationError):
+            obj = self.ProjectTarget.objects.create(ip_address="invalid", project_id=project.id)
+            obj.full_clean()
+
+        with self.assertRaises(ValidationError):
+            obj = self.ProjectTarget.objects.create(ip_address="192.168.1.257", project_id=project.id)
+            obj.full_clean()
+
+        with self.assertRaises(ValidationError):
+            obj = self.ProjectTarget.objects.create(ip_address="192.168.1.10/35", project_id=project.id)
+            obj.full_clean()
 
 
 class ClientInviteModelTests(TestCase):
@@ -613,10 +772,6 @@ class ClientInviteModelTests(TestCase):
         # Read
         self.assertEqual(invite.comment, "Basic comment")
         self.assertEqual(invite.pk, invite.id)
-        self.assertQuerysetEqual(
-            self.ClientInvite.objects.all(),
-            [f"<ClientInvite: {invite.user} ({invite.client})>"],
-        )
 
         # Update
         invite.comment = "Updated comment"
@@ -643,10 +798,6 @@ class ProjectInviteModelTests(TestCase):
         # Read
         self.assertEqual(invite.comment, "Basic comment")
         self.assertEqual(invite.pk, invite.id)
-        self.assertQuerysetEqual(
-            self.ProjectInvite.objects.all(),
-            [f"<ProjectInvite: {invite.user} ({invite.project})>"],
-        )
 
         # Update
         invite.comment = "Updated comment"
@@ -657,3 +808,119 @@ class ProjectInviteModelTests(TestCase):
         # Delete
         invite.delete()
         assert not self.ProjectInvite.objects.all().exists()
+
+
+class DeconflictionStatusModelTests(TestCase):
+    """Collection of tests for :model:`rolodex.DeconflictionStatus`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.DeconflictionStatus = DeconflictionStatusFactory._meta.model
+
+    def test_crud_finding(self):
+        # Create
+        status = DeconflictionStatusFactory(status="Confirmed")
+
+        # Read
+        self.assertEqual(status.status, "Confirmed")
+        self.assertEqual(status.pk, status.id)
+
+        # Update
+        status.status = "Undetermined"
+        status.save()
+
+        # Delete
+        status.delete()
+        assert not self.DeconflictionStatus.objects.all().exists()
+
+
+class DeconflictionModelTests(TestCase):
+    """Collection of tests for :model:`rolodex.Deconfliction`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.Deconfliction = DeconflictionFactory._meta.model
+        cls.project = ProjectFactory()
+
+    def test_crud_finding(self):
+        # Create
+        status = DeconflictionFactory(title="Deconfliction Title", project=self.project)
+
+        # Read
+        self.assertEqual(status.title, "Deconfliction Title")
+        self.assertEqual(status.pk, status.id)
+
+        # Update
+        status.title = "New Deconfliction Title"
+        status.save()
+
+        # Delete
+        status.delete()
+        assert not self.Deconfliction.objects.all().exists()
+
+    def test_prop_log_entries(self):
+        project = ProjectFactory()
+        deconfliction = DeconflictionFactory(project=project, alert_timestamp=datetime.now(timezone.utc))
+        oplog = OplogFactory(project=project)
+
+        entry_too_old = OplogEntryFactory(oplog_id=oplog, start_date=datetime.now(timezone.utc) - timedelta(days=1))
+        entry_hour_old = OplogEntryFactory(oplog_id=oplog, start_date=datetime.now(timezone.utc) - timedelta(hours=1))
+        entry_within_hour = OplogEntryFactory(
+            oplog_id=oplog, start_date=datetime.now(timezone.utc) - timedelta(minutes=30)
+        )
+        entry_recent = OplogEntryFactory(oplog_id=oplog, start_date=datetime.now(timezone.utc) + timedelta(minutes=5))
+
+        self.assertEqual(len(deconfliction.log_entries), 2)
+        self.assertIn(entry_hour_old, deconfliction.log_entries)
+        self.assertIn(entry_within_hour, deconfliction.log_entries)
+        self.assertNotIn(entry_too_old, deconfliction.log_entries)
+        self.assertNotIn(entry_recent, deconfliction.log_entries)
+
+
+class WhiteCardModelTests(TestCase):
+    """Collection of tests for :model:`rolodex.WhiteCard`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.WhiteCard = WhiteCardFactory._meta.model
+        cls.project = ProjectFactory()
+
+    def test_crud_finding(self):
+        # Create
+        card = WhiteCardFactory(title="White Card Title", project=self.project)
+
+        # Read
+        self.assertEqual(card.title, "White Card Title")
+        self.assertEqual(card.pk, card.id)
+
+        # Update
+        card.title = "New White Card Title"
+        card.save()
+
+        # Delete
+        card.delete()
+        assert not self.WhiteCard.objects.all().exists()
+
+
+class ProjectContactModelTests(TestCase):
+    """Collection of tests for :model:`rolodex.ProjectContact`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.ProjectContact = ProjectContactFactory._meta.model
+
+    def test_crud_finding(self):
+        # Create
+        contact = ProjectContactFactory(name="David")
+
+        # Read
+        self.assertEqual(contact.name, "David")
+        self.assertEqual(contact.pk, contact.id)
+
+        # Update
+        contact.name = "Kabletown"
+        contact.save()
+
+        # Delete
+        contact.delete()
+        assert not self.ProjectContact.objects.all().exists()

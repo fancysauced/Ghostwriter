@@ -2,66 +2,25 @@ table:
   name: django_q_task
   schema: public
 configuration:
-  comment: null
+  column_config: {}
   custom_column_names: {}
   custom_name: task
   custom_root_fields: {}
-insert_permissions:
-- permission:
-    backend_only: true
-    check: {}
-    columns:
-    - args
-    - attempt_count
-    - func
-    - group
-    - hook
-    - kwargs
-  role: manager
-- permission:
-    backend_only: true
-    check: {}
-    columns:
-    - args
-    - attempt_count
-    - func
-    - group
-    - hook
-    - kwargs
-  role: restricted
-- permission:
-    backend_only: true
-    check: {}
-    columns:
-    - args
-    - attempt_count
-    - func
-    - group
-    - hook
-    - kwargs
-  role: user
 select_permissions:
-- permission:
-    columns:
-    - success
-    - func
-    - group
-    - hook
-    - id
-    - name
-    - attempt_count
-    - args
-    - kwargs
-    - result
-    - started
-    - stopped
-    filter: {}
-  role: manager
-- permission:
-    columns: "*"
-    filter: {}
-  role: restricted
-- permission:
-    columns: "*"
-    filter: {}
-  role: user
+  - role: manager
+    permission:
+      columns:
+        - args
+        - attempt_count
+        - cluster
+        - func
+        - group
+        - hook
+        - id
+        - kwargs
+        - name
+        - result
+        - started
+        - stopped
+        - success
+      filter: {}

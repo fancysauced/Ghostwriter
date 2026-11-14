@@ -1,0 +1,123 @@
+{% extends "account/base.html" %}
+{% load i18n humanize %}
+
+{% block pagetitle %}{% trans "Security keys" %}{% endblock %}
+
+
+{% block content %}
+  <div class="resource-form-shell account-profile-editor account-webauthn-management">
+    <section class="resource-form-card account-webauthn-management-card" aria-labelledby="security-keys-heading">
+      <div class="resource-form-section-heading">
+        <span class="resource-form-section-icon account-webauthn-card-icon" aria-hidden="true">
+          <i class="fas fa-key"></i>
+        </span>
+        <div>
+          <h1 id="security-keys-heading">{% trans "Security keys" %}</h1>
+          <p>{% trans "Review the physical security keys and device passkeys registered to your account." %}</p>
+        </div>
+      </div>
+
+      <div class="account-webauthn-management-summary">
+        <div>
+          <span class="account-webauthn-management-eyebrow">{% trans "Registered credentials" %}</span>
+          <h2>
+            {% blocktranslate count count=authenticators|length %}
+              {{ count }} key can verify your sign-in
+            {% plural %}
+              {{ count }} keys can verify your sign-in
+            {% endblocktranslate %}
+          </h2>
+        </div>
+        <div class="account-webauthn-management-note">
+          <i class="fas fa-shield-alt" aria-hidden="true"></i>
+          <span>{% trans "Remove keys you no longer possess or recognize." %}</span>
+        </div>
+      </div>
+
+      <div id="token-table" class="account-webauthn-device-list">
+        {% for authenticator in authenticators %}
+          {% with security_key=authenticator.wrap %}
+            <article class="account-webauthn-device">
+              <span
+                class="account-webauthn-device-icon{% if security_key.is_passwordless is True %} account-webauthn-device-icon-passkey{% endif %}"
+                aria-hidden="true"
+              >
+                {% if security_key.is_passwordless is True %}
+                  <i class="fas fa-fingerprint"></i>
+                {% else %}
+                  <i class="fas fa-key"></i>
+                {% endif %}
+              </span>
+
+              <div class="account-webauthn-device-details">
+                <div class="account-webauthn-device-title">
+                  <h2>{{ authenticator }}</h2>
+                  {% if security_key.is_passwordless is True %}
+                    <span class="account-webauthn-device-type">{% trans "Passkey" %}</span>
+                  {% elif security_key.is_passwordless is False %}
+                    <span class="account-webauthn-device-type">{% trans "Security key" %}</span>
+                  {% else %}
+                    <span class="account-webauthn-device-type account-webauthn-device-type-unknown">
+                      {% trans "Type unknown" %}
+                    </span>
+                  {% endif %}
+                </div>
+
+                <div class="account-webauthn-device-meta">
+                  {% if authenticator.created_at %}
+                    <span>
+                      <i class="fas fa-calendar-plus" aria-hidden="true"></i>
+                      {% blocktranslate with created=authenticator.created_at|date:"SHORT_DATE_FORMAT" %}Added {{ created }}{% endblocktranslate %}
+                    </span>
+                  {% endif %}
+                  {% if authenticator.last_used_at %}
+                    <span>
+                      <i class="fas fa-clock" aria-hidden="true"></i>
+                      {% blocktranslate with last=authenticator.last_used_at|naturaltime %}Used {{ last }}{% endblocktranslate %}
+                    </span>
+                  {% else %}
+                    <span><i class="fas fa-clock" aria-hidden="true"></i> {% trans "Not used yet" %}</span>
+                  {% endif %}
+                </div>
+              </div>
+
+              <div class="account-webauthn-device-actions">
+                <a
+                  class="btn btn-sm btn-outline-secondary"
+                  href="{% url 'mfa_edit_webauthn' authenticator.pk %}"
+                  aria-label="{% blocktranslate with name=authenticator %}Rename {{ name }}{% endblocktranslate %}"
+                >
+                  <i class="fas fa-pen" aria-hidden="true"></i> {% trans "Rename" %}
+                </a>
+                <a
+                  class="btn btn-sm btn-outline-danger"
+                  href="{% url 'mfa_remove_webauthn' authenticator.pk %}"
+                  aria-label="{% blocktranslate with name=authenticator %}Remove {{ name }}{% endblocktranslate %}"
+                >
+                  <i class="fas fa-trash-alt" aria-hidden="true"></i> {% trans "Remove" %}
+                </a>
+              </div>
+            </article>
+          {% endwith %}
+        {% empty %}
+          <div class="account-webauthn-management-empty" role="status">
+            <span aria-hidden="true"><i class="fas fa-key"></i></span>
+            <div>
+              <h2>{% trans "No security keys registered" %}</h2>
+              <p>{% trans "Add a security key or passkey to create another secure way to verify your sign-in." %}</p>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <div class="resource-form-actions resource-form-actions-compact account-webauthn-management-actions">
+      <div class="resource-form-actions-buttons">
+        <a class="btn btn-outline-secondary" href="{% url 'mfa_index' %}">{% trans "Back to MFA settings" %}</a>
+        <a class="btn btn-primary" href="{% url 'mfa_add_webauthn' %}">
+          <i class="fas fa-plus" aria-hidden="true"></i> {% trans "Add security key" %}
+        </a>
+      </div>
+    </div>
+  </div>
+{% endblock %}

@@ -4,29 +4,14 @@
 {% block pagetitle %}Operation Log Entry{% endblock %}
 
 {% block content %}
-<p>Enter log details:</p>
+    <header class="resource-form-page-heading mb-4">
+        <span class="detail-eyebrow">Operation Log Entry</span>
+        <h1>{% if object.pk %}Edit activity{% else %}Record activity{% endif %}</h1>
+        <p>Capture the action, timing, source, destination, output, and reportable context operators need.</p>
+    </header>
 
-<!-- Form Section -->
-<form class="newitem" action="" method="post">
-    {% csrf_token %}
-
-    <!-- General Section -->
-    <strong><i class="fas fa-database"></i> Operation Log Entry Details</strong>
-    <hr>
-    {{ form.oplog_id|as_crispy_field }}
-    {{ form.start_date|as_crispy_field }}
-    {{ form.end_date|as_crispy_field }}
-    {{ form.source_ip|as_crispy_field }}
-    {{ form.dest_ip|as_crispy_field }}
-    {{ form.tool|as_crispy_field }}
-    {{ form.user_context|as_crispy_field }}
-    {{ form.command|as_crispy_field }}
-    {{ form.description|as_crispy_field }}
-    {{ form.output|as_crispy_field }}
-    {{ form.comments|as_crispy_field }}
-    {{ form.operator_name|as_crispy_field }}
-
-    <input type="submit" class="btn btn-primary" value="Save">
-    <button onclick="window.history.back();" class="btn btn-secondary" type="button">Cancel</button>
-</form>
+    {% comment %} Form section included from inner template {% endcomment %}
+    <div class="resource-form-shell">
+        {% include "oplog/snippets/oplogentry_form_inner.html" with form=form %}
+    </div>
 {% endblock %}

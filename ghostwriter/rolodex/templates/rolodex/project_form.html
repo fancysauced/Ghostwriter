@@ -3,135 +3,448 @@
 
 {% block pagetitle %}Project Form{% endblock %}
 
-{% block breadcrumbs %}
-    <nav aria-label="breadcrumb">
-        <ul class="breadcrumb">
-            {% comment %} Create breadcrumbs based on the context of the request {% endcomment %}
-            <li class="breadcrumb-item"><a href="{% url 'home:dashboard' %}">Dashboard</a></li>
-            {% comment %} Check if `object` is in context to determine if this is a ProjectUpdate` request {% endcomment %}
-            {% if object %}
-                <li class="breadcrumb-item"><a data-toggle="tooltip" title="{{ object.client }}" href="{% url 'rolodex:client_detail' object.client.id %}">{{ object.client }}</a></li>
-                <li class="breadcrumb-item"><a data-toggle="tooltip" title="{{ object }}" href="{% url 'rolodex:project_detail' object.id %}">{{ object.start_date|date:"DATE_FORMAT" }} {{ object.project_type }}</a></li>
-                <li class="breadcrumb-item active" aria-current="page">Edit</li>
-            {% else %}
-            {% comment %} Check if `client` is in context for `ProjectCreate` for a specific client {% endcomment %}
-                {% if client %}
-                    <li class="breadcrumb-item"><a data-toggle="tooltip" title="{{ client }}" href="{% url 'rolodex:client_detail' client.id %}">{{ client }}</a></li>
-                {% endif %}
-                <li class="breadcrumb-item active" aria-current="page">New Project Form</li>
-            {% endif %}
-        </ul>
-    </nav>
-{% endblock %}
 
 {% block content %}
-    <strong class="icon project-icon">Setup a Project</strong>
-    <hr>
-    <p>Use the tabs to provide basic project parameters, notes, assignments, and objectives:</p>
-
-    <!-- Form Error Section -->
-    {% if form.errors %}
-        <script>
-            {% for field in form %}
-                {% for error in field.errors %}
-                    displayToastTop({type:'error', string:'{{ error }}', context:'form'});
-                {% endfor %}
-            {% endfor %}
-            {% for error in form.non_field_errors %}
-                displayToastTop({type:'error', string:'{{ error }}', context:'form'});
-            {% endfor %}
-        </script>
+  <header class="resource-form-page-heading mb-4">
+    <span class="detail-eyebrow">Project</span>
+    {% if form.extra_fields %}
+      <h1>Manage {{ object.codename|default:"project" }} components</h1>
+      <p>Maintain the people, objectives, scope, targets, and project-specific reporting metadata used by operators.</p>
+    {% elif object.id %}
+      <h1>Edit {{ object.codename|default:"project" }}</h1>
+      <p>Keep engagement identity, schedule, access, and integrations current.</p>
+    {% else %}
+      <h1>Create project</h1>
+      <p>Establish the engagement, schedule, and initial operator access.</p>
     {% endif %}
+  </header>
 
-    <!-- Form Section -->
-    {% crispy form form.helper %}
+  <!-- Form Error Section -->
+  {% if form.errors %}
+    <script>
+      {% for field in form %}
+        {% for error in field.errors %}
+          displayToastTop({type: 'error', string: '{{ error|escapejs }}', context: 'form'});
+        {% endfor %}
+      {% endfor %}
+      {% for error in form.non_field_errors %}
+        displayToastTop({type: 'error', string: '{{ error|escapejs }}', context: 'form'});
+      {% endfor %}
+    </script>
+  {% endif %}
+
+  <!-- Form Section -->
+  <div class="project-form-shell">
+    <div class="resource-form-shell tabbed-form-shell" data-tiptap-min-height="240">
+      {% crispy form form.helper %}
+    </div>
+  </div>
 {% endblock %}
 
 {% block tabs %}
-    {{ block.super }}
+  {{ block.super }}
 {% endblock %}
 
 {% block tabforms %}
-    {{ block.super }}
+  {{ block.super }}
 {% endblock %}
 
 {% block morescripts %}
-    <!-- Copy a Project Date to the Provided Field -->
-    <script>
-        function copyStartDate(deadline_field) {
-            var project_date = document.getElementById('id_start_date').value;
-            deadline_field.val(project_date);
+  <script>
+    const projectCollectionConfigs = {
+      'tab-pane-assignments': {
+        type: 'assignment',
+        icon: 'assignment-icon',
+        primary: 'operator',
+        secondary: ['role', 'start_date', 'end_date'],
+        emptyTitle: 'No assignments yet',
+        emptyDescription: 'Add an operator when someone is scheduled to work on this engagement.'
+      },
+      'tab-pane-invites': {
+        type: 'access',
+        icon: 'users-icon',
+        primary: 'user',
+        secondary: [],
+        emptyTitle: 'No project-level access',
+        emptyDescription: 'Grant access when an operator needs this project but not the entire client workspace.'
+      },
+      'tab-pane-contacts': {
+        type: 'contact',
+        icon: 'poc-icon',
+        primary: 'name',
+        secondary: ['job_title', 'email'],
+        emptyTitle: 'No project contacts yet',
+        emptyDescription: 'Add a contact when someone coordinates specifically for this engagement.'
+      },
+      'tab-pane-whitecards': {
+        type: 'whitecard',
+        icon: 'whitecard-icon',
+        primary: 'title',
+        secondary: ['issued'],
+        emptyTitle: 'No white cards yet',
+        emptyDescription: 'Add a white card when the client provides approved access or an exercise inject.'
+      },
+      'tab-pane-scopes': {
+        type: 'scope',
+        icon: 'list-icon',
+        primary: 'name',
+        secondary: ['scope'],
+        emptyTitle: 'No scope lists yet',
+        emptyDescription: 'Add a scope list to organize the assets operators may or may not target.'
+      },
+      'tab-pane-objectives': {
+        type: 'objective',
+        icon: 'objective-icon',
+        primary: 'objective',
+        secondary: ['status', 'deadline'],
+        emptyTitle: 'No objectives yet',
+        emptyDescription: 'Add an objective to define an outcome operators will pursue and report against.'
+      },
+      'tab-pane-targets': {
+        type: 'target',
+        icon: 'crosshairs-icon',
+        primary: 'hostname',
+        fallbackPrimary: 'ip_address',
+        secondary: ['ip_address'],
+        emptyTitle: 'No targets yet',
+        emptyDescription: 'Add a target system when operators need quick access to host context.'
+      }
+    };
+
+    function getProjectCollectionField($container, fieldName) {
+      return $container.find(
+        ':input[id$="-' + fieldName + '"]:not([id*="__prefix__"])'
+      ).first();
+    }
+
+    function getProjectCollectionValue($field) {
+      if (!$field.length) {
+        return '';
+      }
+      if ($field.is('select')) {
+        return $field.val() ? $field.find('option:selected').text().trim() : '';
+      }
+      return String($field.val() || '').trim().split('\n')[0];
+    }
+
+    function updateProjectCollectionSummary(card) {
+      let $card = $(card);
+      let $container = $card.closest('.formset-container');
+      let config = projectCollectionConfigs[$card.closest('.tab-pane').attr('id')];
+      if (!config) {
+        return;
+      }
+
+      let title = getProjectCollectionValue(getProjectCollectionField($container, config.primary));
+      if (!title && config.fallbackPrimary) {
+        title = getProjectCollectionValue(getProjectCollectionField($container, config.fallbackPrimary));
+      }
+      let metadata = config.secondary.map(function (fieldName) {
+        return getProjectCollectionValue(getProjectCollectionField($container, fieldName));
+      }).filter(Boolean);
+
+      $card.find('.collection-form-card-title').first().text(title || 'New ' + config.type);
+      $card.find('.collection-form-card-meta').first().text(
+        metadata.length ? metadata.join(' · ') : 'Add ' + config.type + ' details'
+      );
+    }
+
+    function updateProjectCollectionState(tabPaneId) {
+      let config = projectCollectionConfigs[tabPaneId];
+      let $pane = $('#' + tabPaneId);
+      if (!config || !$pane.length) {
+        return;
+      }
+      let $cards = $pane.find('.collection-form-card').filter(function () {
+        let $container = $(this).closest('.formset-container');
+        return !$container.closest('[id^="empty-form-"]').length &&
+          !$container.find(':input[id$="-DELETE"]').is(':checked');
+      });
+      let count = $cards.length;
+      let $emptyState = $pane.find('[data-project-collection-empty="' + config.type + '"]');
+      if (!$emptyState.length) {
+        $emptyState = $('<div>', {
+          class: 'empty-state collection-empty-state',
+          'data-project-collection-empty': config.type
+        }).append(
+          $('<i>', {class: 'fas fa-inbox empty-state-icon', 'aria-hidden': 'true'}),
+          $('<h3>', {class: 'empty-state-title'}).text(config.emptyTitle),
+          $('<p>', {class: 'empty-state-description'}).text(config.emptyDescription)
+        );
+        $pane.find('.collection-toolbar').first().after($emptyState);
+      }
+      $emptyState.toggleClass('d-none', count !== 0);
+
+      let hash = '#' + tabPaneId.replace('tab-pane-', '');
+      let $tab = $('#tab-bar a[data-tab-hash="' + hash + '"]');
+      let $badge = $tab.find('.collection-tab-count');
+      if (!$badge.length) {
+        $badge = $('<span>', {
+          class: 'badge collection-tab-count',
+          'aria-label': 'item count'
+        });
+        $tab.append($badge);
+      }
+      $badge.text(count);
+    }
+
+    function isNewProjectCollectionForm($container) {
+      let $indexedField = $container.find(
+        ':input[name*="-"]:not([name*="__prefix__"])'
+      ).first();
+      let fieldName = String($indexedField.attr('name') || '');
+      let fieldMatch = fieldName.match(/^(.+)-(\d+)-/);
+      if (!fieldMatch) {
+        return false;
+      }
+
+      let initialFormCount = parseInt(
+        $('#id_' + fieldMatch[1] + '-INITIAL_FORMS').val(),
+        10
+      );
+      return Number.isFinite(initialFormCount) &&
+        parseInt(fieldMatch[2], 10) >= initialFormCount;
+    }
+
+    function enhanceProjectCollectionForm($container) {
+      let tabPaneId = $container.closest('.tab-pane').attr('id');
+      let config = projectCollectionConfigs[tabPaneId];
+      let $formset = $container.children('.formset').first();
+      if (!config || !$formset.length || $container.find('.collection-form-card').length) {
+        return;
+      }
+
+      let hasErrors = $formset.find('.is-invalid').length > 0 ||
+        $formset.find('.invalid-feedback').filter(function () {
+          return String($(this).text() || '').trim().length > 0;
+        }).length > 0;
+      let isNew = isNewProjectCollectionForm($container);
+      let $legacyHeading = $formset.children('h6').first();
+      $legacyHeading.add($legacyHeading.next('hr')).addClass('d-none');
+
+      let $card = $('<details>', {
+        class: 'collection-form-card project-collection-card',
+        'data-collection-item': config.type
+      }).prop('open', hasErrors || isNew);
+      let $summary = $('<summary>', {class: 'collection-form-card-summary'}).append(
+        $('<span>', {
+          class: 'collection-form-card-icon ' + config.icon,
+          'aria-hidden': 'true'
+        }),
+        $('<span>', {class: 'collection-form-card-identity'}).append(
+          $('<span>', {class: 'collection-form-card-title'}),
+          $('<span>', {class: 'collection-form-card-meta'})
+        ),
+        $('<i>', {
+          class: 'fas fa-chevron-down collection-form-card-chevron',
+          'aria-hidden': 'true'
+        })
+      );
+      let $body = $('<div>', {class: 'collection-form-card-body'});
+      $formset.addClass('collection-form-card-fields');
+      $card.append($summary, $body.append($formset));
+      $container.append($card);
+      updateProjectCollectionSummary($card[0]);
+    }
+
+    function refreshProjectCollections() {
+      Object.keys(projectCollectionConfigs).forEach(function (tabPaneId) {
+        $('#' + tabPaneId + ' .formset-container').filter(function () {
+          return !$(this).closest('[id^="empty-form-"]').length;
+        }).each(function () {
+          enhanceProjectCollectionForm($(this));
+          let $card = $(this).find('.collection-form-card').first();
+          if ($card.find('.is-invalid, .invalid-feedback').length) {
+            $card.prop('open', true);
+            initRichTextEditors($card);
+          }
+          updateProjectCollectionSummary($card[0]);
+        });
+        updateProjectCollectionState(tabPaneId);
+      });
+    }
+
+    function copyStartDate(deadline_field) {
+      let project_date = document.getElementById('id_start_date').value;
+      deadline_field.val(project_date);
+    }
+
+    function copyEndDate(deadline_field) {
+      let project_date = document.getElementById('id_end_date').value;
+      deadline_field.val(project_date);
+    }
+
+    function setNow(field) {
+      field.val(new Date().toJSON().slice(0, 19));
+    }
+
+    function initRichTextEditors($container) {
+      if (window.gwInitTiptapStableContainer) {
+        window.gwInitTiptapStableContainer($container[0]);
+      }
+    }
+
+    {% comment %} Formset Manipulation Buttons {% endcomment %}
+    $('.formset-add-{{ objectives.prefix }}').click(function () {
+      let form_idx = $('#id_{{ objectives.prefix }}-TOTAL_FORMS').val();
+      $('#formset-{{ objectives.prefix }}').append($('#empty-form-{{ objectives.prefix }}').html().replace(/__prefix__/g, form_idx));
+      $('#id_{{ objectives.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
+      let new_form = $('#formset-{{ objectives.prefix }}').find('div.formset-container').last()
+      new_form.find('span.counter').html(parseInt(form_idx) + 1);
+      enhanceProjectCollectionForm(new_form);
+      new_form.find('.collection-form-card').prop('open', true);
+      initRichTextEditors(new_form);
+      window.gwHighlightNewFormset(new_form[0]);
+      refreshProjectCollections();
+    });
+
+    $('.formset-add-{{ assignments.prefix }}').click(function () {
+      let form_idx = $('#id_{{ assignments.prefix }}-TOTAL_FORMS').val();
+      $('#formset-{{ assignments.prefix }}').append($('#empty-form-{{ assignments.prefix }}').html().replace(/__prefix__/g, form_idx));
+      $('#id_{{ assignments.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
+      let new_form = $('#formset-{{ assignments.prefix }}').find('div.formset-container').last()
+      new_form.find('span.counter').html(parseInt(form_idx) + 1);
+      enhanceProjectCollectionForm(new_form);
+      new_form.find('.collection-form-card').prop('open', true);
+      initRichTextEditors(new_form);
+      window.gwHighlightNewFormset(new_form[0]);
+      refreshProjectCollections();
+    });
+
+    $('.formset-add-{{ invites.prefix }}').click(function () {
+      let form_idx = $('#id_{{ invites.prefix }}-TOTAL_FORMS').val();
+      $('#formset-{{ invites.prefix }}').append($('#empty-form-{{ invites.prefix }}').html().replace(/__prefix__/g, form_idx));
+      $('#id_{{ invites.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
+      let new_form = $('#formset-{{ invites.prefix }}').find('div.formset-container').last()
+      new_form.find('span.counter').html(parseInt(form_idx) + 1);
+      enhanceProjectCollectionForm(new_form);
+      new_form.find('.collection-form-card').prop('open', true);
+      initRichTextEditors(new_form);
+      window.gwHighlightNewFormset(new_form[0]);
+      refreshProjectCollections();
+    });
+
+    $('.formset-add-{{ scopes.prefix }}').click(function () {
+      let form_idx = $('#id_{{ scopes.prefix }}-TOTAL_FORMS').val();
+      $('#formset-{{ scopes.prefix }}').append($('#empty-form-{{ scopes.prefix }}').html().replace(/__prefix__/g, form_idx));
+      $('#id_{{ scopes.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
+      let new_form = $('#formset-{{ scopes.prefix }}').find('div.formset-container').last()
+      new_form.find('span.counter').html(parseInt(form_idx) + 1);
+      enhanceProjectCollectionForm(new_form);
+      new_form.find('.collection-form-card').prop('open', true);
+      initRichTextEditors(new_form);
+      window.gwHighlightNewFormset(new_form[0]);
+      refreshProjectCollections();
+    });
+
+    $('.formset-add-{{ targets.prefix }}').click(function () {
+      let form_idx = $('#id_{{ targets.prefix }}-TOTAL_FORMS').val();
+      $('#formset-{{ targets.prefix }}').append($('#empty-form-{{ targets.prefix }}').html().replace(/__prefix__/g, form_idx));
+      $('#id_{{ targets.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
+      let new_form = $('#formset-{{ targets.prefix }}').find('div.formset-container').last()
+      new_form.find('span.counter').html(parseInt(form_idx) + 1);
+      enhanceProjectCollectionForm(new_form);
+      new_form.find('.collection-form-card').prop('open', true);
+      initRichTextEditors(new_form);
+      window.gwHighlightNewFormset(new_form[0]);
+      refreshProjectCollections();
+    });
+
+    $('.formset-add-{{ whitecards.prefix }}').click(function () {
+      let form_idx = $('#id_{{ whitecards.prefix }}-TOTAL_FORMS').val();
+      $('#formset-{{ whitecards.prefix }}').append($('#empty-form-{{ whitecards.prefix }}').html().replace(/__prefix__/g, form_idx));
+      $('#id_{{ whitecards.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
+      let new_form = $('#formset-{{ whitecards.prefix }}').find('div.formset-container').last()
+      new_form.find('span.counter').html(parseInt(form_idx) + 1);
+      enhanceProjectCollectionForm(new_form);
+      new_form.find('.collection-form-card').prop('open', true);
+      initRichTextEditors(new_form);
+      window.gwHighlightNewFormset(new_form[0]);
+      refreshProjectCollections();
+    });
+
+    $('.formset-add-{{ contacts.prefix }}').click(function () {
+      let form_idx = $('#id_{{ contacts.prefix }}-TOTAL_FORMS').val();
+      $('#formset-{{ contacts.prefix }}').append($('#empty-form-{{ contacts.prefix }}').html().replace(/__prefix__/g, form_idx));
+      $('#id_{{ contacts.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
+      let new_form = $('#formset-{{ contacts.prefix }}').find('div.formset-container').last()
+      new_form.find('span.counter').html(parseInt(form_idx) + 1);
+      enhanceProjectCollectionForm(new_form);
+      new_form.find('.collection-form-card').prop('open', true);
+      initRichTextEditors(new_form);
+      window.gwHighlightNewFormset(new_form[0]);
+      refreshProjectCollections();
+    });
+
+    {% comment %} Roll Codename with AJAX {% endcomment %}
+    $('.js-roll-codename').click(function () {
+      let url = $(this).attr('roll-codename-url');
+      // Send AJAX POST request
+      $.ajax({
+        url: url,
+        type: 'GET',
+        success: function (data) {
+          $("#id_codename").val(data['codename']);
         }
+      });
+    });
 
-        function copyEndDate(deadline_field) {
-            var project_date = document.getElementById('id_end_date').value;
-            deadline_field.val(project_date);
-        }
-    </script>
+    {% comment %} Split and trim scope list {% endcomment %}
 
-    <!-- Formset Manipulation Buttons -->
-    <script>
-        $('.formset-add-{{ objectives.prefix }}').click(function() {
-            var form_idx = $('#id_{{ objectives.prefix }}-TOTAL_FORMS').val();
-            $('#formset-{{ objectives.prefix }}').append($('#empty-form-{{ objectives.prefix }}').html().replace(/__prefix__/g, form_idx));
-            $('#id_{{ objectives.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
-            var new_form = $('#formset-{{ objectives.prefix }}').find('div.formset-container').last()
-            new_form.find('span.counter').html(parseInt(form_idx) + 1);
-            new_form.fadeOut(100).fadeIn(100).fadeOut(100).fadeIn(100);
-            // Re-initialize WYSIWYG editor for the new form
-            target = 'id_{{ objectives.prefix }}-' + parseInt(form_idx) + '-description'
-            tinymce.execCommand('mceAddEditor', false, target);
-        });
+    function formatScope($field) {
+      let scope = $field.val();
+      let scope_list = scope.split(',');
+      let scope_list_trimmed = [];
+      for (let i = 0; i < scope_list.length; i++) {
+        scope_list_trimmed.push(scope_list[i].trim() + '\n');
+      }
+      $field.val(scope_list_trimmed.join(''));
+    }
 
-        $('.formset-add-{{ assignments.prefix }}').click(function() {
-            var form_idx = $('#id_{{ assignments.prefix }}-TOTAL_FORMS').val();
-            $('#formset-{{ assignments.prefix }}').append($('#empty-form-{{ assignments.prefix }}').html().replace(/__prefix__/g, form_idx));
-            $('#id_{{ assignments.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
-            var new_form = $('#formset-{{ assignments.prefix }}').find('div.formset-container').last()
-            new_form.find('span.counter').html(parseInt(form_idx) + 1);
-            new_form.fadeOut(100).fadeIn(100).fadeOut(100).fadeIn(100);
-            // Re-initialize WYSIWYG editor for the new form
-            target = 'id_{{ assignments.prefix }}-' + parseInt(form_idx) + '-note'
-            tinymce.execCommand('mceAddEditor', false, target);
-        });
+    {% comment %} Set objective deadline to project end date {% endcomment %}
 
-        $('.formset-add-{{ scopes.prefix }}').click(function() {
-            var form_idx = $('#id_{{ scopes.prefix }}-TOTAL_FORMS').val();
-            $('#formset-{{ scopes.prefix }}').append($('#empty-form-{{ scopes.prefix }}').html().replace(/__prefix__/g, form_idx));
-            $('#id_{{ scopes.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
-            var new_form = $('#formset-{{ scopes.prefix }}').find('div.formset-container').last()
-            new_form.find('span.counter').html(parseInt(form_idx) + 1);
-            new_form.fadeOut(100).fadeIn(100).fadeOut(100).fadeIn(100);
-            // Re-initialize WYSIWYG editor for the new form
-            target = 'id_{{ scopes.prefix }}-' + parseInt(form_idx) + '-description'
-            tinymce.execCommand('mceAddEditor', false, target);
-        });
+    function setObjectiveDeadline(deadline_field) {
+      let project_date = new Date('{{ project.end_date|escapejs }}').toISOString().split('T')[0];
+      deadline_field.val(project_date);
+    }
 
-        $('.formset-add-{{ targets.prefix }}').click(function() {
-            var form_idx = $('#id_{{ targets.prefix }}-TOTAL_FORMS').val();
-            $('#formset-{{ targets.prefix }}').append($('#empty-form-{{ targets.prefix }}').html().replace(/__prefix__/g, form_idx));
-            $('#id_{{ targets.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
-            var new_form = $('#formset-{{ targets.prefix }}').find('div.formset-container').last()
-            new_form.find('span.counter').html(parseInt(form_idx) + 1);
-            new_form.fadeOut(100).fadeIn(100).fadeOut(100).fadeIn(100);
-            // Re-initialize WYSIWYG editor for the new form
-            target = 'id_{{ targets.prefix }}-' + parseInt(form_idx) + '-note'
-            tinymce.execCommand('mceAddEditor', false, target);
-        });
-    </script>
+    function cbChange(obj) {
+      let cbs = document.getElementsByClassName('js-cb-toggle');
+      for (let i = 0; i < cbs.length; i++) {
+        cbs[i].checked = false;
+      }
+      displayToastTop({type: 'success', string: 'Updated the primary contact (there must be one and only one).', title: 'Contacts Updated'})
+      obj.checked = true;
+    }
 
-    <!-- Roll Codename with AJAX -->
-    <script>
-        $(".js-roll-codename").click(function () {
-            var url = $(this).attr('roll-codename-url');
-            // Send AJAX POST request
-            $.ajax({
-                url: url,
-                type: 'GET',
-                success: function (data) {
-                    $("#id_codename").val(data['codename']);
-                }
-            });
-        });
-    </script>
+    $(document).on(
+      'input change',
+      '.project-collection-card :input:not([id$="-DELETE"])',
+      function () {
+        updateProjectCollectionSummary($(this).closest('.project-collection-card')[0]);
+      }
+    );
+
+    $(document).on('click', '.project-form-shell .formset-del-button', function () {
+      let $container = $(this).closest('.formset-container');
+      window.setTimeout(function () {
+        $container.find('.collection-form-card').prop('hidden', true);
+        refreshProjectCollections();
+      }, 0);
+    });
+
+    $(document).on('click', '.project-form-shell .formset-undo-button', function () {
+      let $container = $(this).closest('.formset-container');
+      window.setTimeout(function () {
+        $container.find('.collection-form-card').prop('hidden', false);
+        refreshProjectCollections();
+      }, 0);
+    });
+
+    // This template is rendered at the end of <body>, so its formsets already
+    // exist. Collapse saved collection items before the rich-text initializer
+    // initializer runs; otherwise a direct link to a rich-text tab mounts every
+    // editor before the cards close and produces a visible layout shift.
+    refreshProjectCollections();
+  </script>
 {% endblock %}

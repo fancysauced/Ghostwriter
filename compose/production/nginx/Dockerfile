@@ -1,2 +1,2 @@
-FROM nginx:1.21.1-alpine
-# ADD nginx.conf /etc/nginx/nginx.conf
+FROM nginx:1.23.3-alpine
+COPY compose/production/nginx/nginx.conf compose/production/nginx/nginx_common.conf /etc/nginx/

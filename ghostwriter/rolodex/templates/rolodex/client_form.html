@@ -3,82 +3,195 @@
 
 {% block pagetitle %}Client Form{% endblock %}
 
-{% block breadcrumbs %}
-    <nav aria-label="breadcrumb">
-        <ul class="breadcrumb">
-            {% comment %} Create breadcrumbs based on the context of the request {% endcomment %}
-            <li class="breadcrumb-item"><a href="{% url 'home:dashboard' %}">Dashboard</a></li>
-            {% comment %} Check if `object` is in context to determine if this is a `ClientUpdate` request {% endcomment %}
-            {% if object %}
-                <li class="breadcrumb-item"><a href="{% url 'rolodex:clients' %}">Clients</a></li>
-                <li class="breadcrumb-item"><a href="{% url 'rolodex:client_detail' object.id %}">{{ client.name }}</a></li>
-                <li class="breadcrumb-item active" aria-current="page">Update</li>
-            {% else %}
-                <li class="breadcrumb-item active" aria-current="page">New Client Form</li>
-            {% endif %}
-        </ul>
-    </nav>
-{% endblock %}
 
 {% block content %}
-    <strong class="icon client-icon">Setup a Client</strong>
-    <hr>
-    <p>Use the tabs to provide basic client information and add points of contact:</p>
-
-    <!-- Form Error Section -->
-    {% if form.errors %}
-        <script>
-            {% for field in form %}
-                {% for error in field.errors %}
-                    displayToastTop({type:'error', string:'{{ error }}', context:'form'});
-                {% endfor %}
-            {% endfor %}
-            {% for error in form.non_field_errors %}
-                displayToastTop({type:'error', string:'{{ error }}', context:'form'});
-            {% endfor %}
-        </script>
+  <header class="resource-form-page-heading mb-4">
+    <span class="detail-eyebrow">Client</span>
+    {% if object.id %}
+      <h1>Edit {{ object.name }}</h1>
+      <p>Keep the client identity, contacts, access, and reporting metadata current.</p>
+    {% else %}
+      <h1>Create client</h1>
+      <p>Establish the client workspace first; contacts and access can be added when they are known.</p>
     {% endif %}
+  </header>
 
-    <!-- Form Section -->
+  <!-- Form Error Section -->
+  {% if form.errors %}
+    <script>
+      {% for field in form %}
+        {% for error in field.errors %}
+          displayToastTop({type: 'error', string: '{{ error|escapejs }}', context: 'form'});
+        {% endfor %}
+      {% endfor %}
+      {% for error in form.non_field_errors %}
+        displayToastTop({type: 'error', string: '{{ error|escapejs }}', context: 'form'});
+      {% endfor %}
+    </script>
+  {% endif %}
+
+  <!-- Form Section -->
+  <div class="client-form-shell tabbed-form-shell">
     {% crispy form form.helper %}
-{% endblock %}
-
-{% block tabs %}
-    {{ block.super }}
-{% endblock %}
-
-{% block tabforms %}
-    {{ block.super }}
+  </div>
 {% endblock %}
 
 {% block morescripts %}
-    <!-- Formset Manipulation Buttons -->
-    <script>
-        $('.formset-add-{{ contacts.prefix }}').click(function() {
-            var form_idx = $('#id_{{ contacts.prefix }}-TOTAL_FORMS').val();
-            $('#formset-{{ contacts.prefix }}').append($('#empty-form-{{ contacts.prefix }}').html().replace(/__prefix__/g, form_idx));
-            $('#id_{{ contacts.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
-            var new_form = $('#formset-{{ contacts.prefix }}').find('div.formset-container').last()
-            new_form.find('span.counter').html(parseInt(form_idx) + 1);
-            new_form.fadeOut(100).fadeIn(100).fadeOut(100).fadeIn(100);
-            // Re-initialize WYSIWYG editor for the new form
-            target = 'id_{{ contacts.prefix }}-' + parseInt(form_idx) + '-note'
-            tinymce.execCommand('mceAddEditor', false, target);
-        });
-    </script>
+  <script>
+    function getCollectionCard($element) {
+      return $element.closest('.formset-container').find('.collection-form-card').first();
+    }
 
-    <!-- Roll Codename with AJAX -->
-    <script>
-        $(".js-roll-codename").click(function () {
-            var url = $(this).attr('roll-codename-url');
-            // Send AJAX POST request
-            $.ajax({
-                url: url,
-                type: 'GET',
-                success: function (data) {
-                    $("#id_codename").val(data['codename']);
-                }
-            });
+    function getCollectionDisplayValue($field) {
+      if (!$field.length) {
+        return '';
+      }
+      if ($field.is('select')) {
+        let value = $field.val();
+        return value ? $field.find('option:selected').text().trim() : '';
+      }
+      return String($field.val() || '').trim();
+    }
+
+    function updateCollectionCardSummary(card) {
+      let $card = $(card);
+      let itemType = $card.data('collection-item');
+      let $container = $card.closest('.formset-container');
+      let $title = $card.find('.collection-form-card-title').first();
+      let $meta = $card.find('.collection-form-card-meta').first();
+
+      if (itemType === 'contact') {
+        let name = getCollectionDisplayValue($container.find(':input[id$="-name"]').first());
+        let jobTitle = getCollectionDisplayValue($container.find(':input[id$="-job_title"]').first());
+        let email = getCollectionDisplayValue($container.find(':input[id$="-email"]').first());
+        let metadata = [jobTitle, email].filter(Boolean);
+        $title.text(name || 'New contact');
+        $meta.text(metadata.length ? metadata.join(' · ') : 'Add contact details');
+
+        let isPrimary = $container.find(':input[id$="-primary"]').is(':checked');
+        let $status = $card.find('.collection-form-card-status').first();
+        $status.text(isPrimary ? 'Primary' : '');
+        $status.toggleClass('d-none', !isPrimary);
+      } else if (itemType === 'access') {
+        let operator = getCollectionDisplayValue($container.find('select[id$="-user"]').first());
+        $title.text(operator || 'Select an operator');
+      }
+    }
+
+    function updateCollectionState(itemType, tabHash) {
+      let selector = '.collection-form-card[data-collection-item="' + itemType + '"]';
+      let $cards = $(selector).filter(function () {
+        let $container = $(this).closest('.formset-container');
+        return !$(this).closest('[id^="empty-form-"]').length &&
+          !$container.find(':input[id$="-DELETE"]').is(':checked');
+      });
+      let count = $cards.length;
+      let $emptyState = $('[data-collection-empty="' + itemType + '"]');
+      $emptyState.toggleClass('d-none', count !== 0);
+
+      let $tab = $('#tab-bar a[data-tab-hash="' + tabHash + '"]');
+      let $badge = $tab.find('.collection-tab-count');
+      if (!$badge.length) {
+        $badge = $('<span>', {
+          class: 'badge collection-tab-count',
+          'aria-label': 'item count'
         });
-    </script>
+        $tab.append($badge);
+      }
+      $badge.text(count);
+    }
+
+    function refreshClientCollections() {
+      $('.collection-form-card').filter(function () {
+        return !$(this).closest('[id^="empty-form-"]').length;
+      }).each(function () {
+        let $card = $(this);
+        if ($card.find('.is-invalid, .invalid-feedback').length) {
+          $card.prop('open', true);
+          initRichTextEditors($card);
+        }
+        updateCollectionCardSummary(this);
+      });
+      updateCollectionState('contact', '#contacts');
+      updateCollectionState('access', '#invites');
+    }
+
+    function initRichTextEditors($container) {
+      if (window.gwInitTiptapStableContainer) {
+        window.gwInitTiptapStableContainer($container[0]);
+      }
+    }
+
+    {% comment %} Formset manipulation buttons {% endcomment %}
+    $('.formset-add-{{ contacts.prefix }}').click(function () {
+      let form_idx = $('#id_{{ contacts.prefix }}-TOTAL_FORMS').val();
+      $('#formset-{{ contacts.prefix }}').append($('#empty-form-{{ contacts.prefix }}').html().replace(/__prefix__/g, form_idx));
+      $('#id_{{ contacts.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
+      let new_form = $('#formset-{{ contacts.prefix }}').find('div.formset-container').last()
+      getCollectionCard(new_form).prop('open', true);
+      initRichTextEditors(new_form);
+      window.gwHighlightNewFormset(new_form[0]);
+      refreshClientCollections();
+    });
+
+    $('.formset-add-{{ invites.prefix }}').click(function () {
+      let form_idx = $('#id_{{ invites.prefix }}-TOTAL_FORMS').val();
+      $('#formset-{{ invites.prefix }}').append($('#empty-form-{{ invites.prefix }}').html().replace(/__prefix__/g, form_idx));
+      $('#id_{{ invites.prefix }}-TOTAL_FORMS').val(parseInt(form_idx) + 1);
+      let new_form = $('#formset-{{ invites.prefix }}').find('div.formset-container').last()
+      getCollectionCard(new_form).prop('open', true);
+      initRichTextEditors(new_form);
+      window.gwHighlightNewFormset(new_form[0]);
+      refreshClientCollections();
+    });
+
+    $(document).on(
+      'input change',
+      '.collection-form-card :input:not([id$="-DELETE"])',
+      function () {
+        updateCollectionCardSummary($(this).closest('.collection-form-card')[0]);
+      }
+    );
+
+    $(document).on('click', '.client-form-shell .formset-del-button', function () {
+      let $container = $(this).closest('.formset-container');
+      window.setTimeout(function () {
+        $container.find('.collection-form-card').prop('hidden', true);
+        refreshClientCollections();
+      }, 0);
+    });
+
+    $(document).on('click', '.client-form-shell .formset-undo-button', function () {
+      let $container = $(this).closest('.formset-container');
+      window.setTimeout(function () {
+        $container.find('.collection-form-card').prop('hidden', false);
+        refreshClientCollections();
+      }, 0);
+    });
+
+    {% comment %} Roll Codename with AJAX {% endcomment %}
+    $('.js-roll-codename').click(function () {
+      let url = $(this).attr('roll-codename-url');
+      $.ajax({
+        url: url,
+        type: 'GET',
+        success: function (data) {
+          $('#id_codename').val(data['codename']);
+        }
+      });
+    });
+
+    function cbChange(obj) {
+      let cbs = document.getElementsByClassName('js-cb-toggle');
+      for (let i = 0; i < cbs.length; i++) {
+        cbs[i].checked = false;
+      }
+      displayToastTop({type: 'success', string: 'Updated the primary contact (there must be one and only one).', title: 'Contacts Updated'})
+      obj.checked = true;
+    }
+
+    $(function () {
+      refreshClientCollections();
+    });
+  </script>
 {% endblock %}

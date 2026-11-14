@@ -1,4 +1,4 @@
-"""This contains all of the database models for the Shepherd application."""
+"""This contains all the database models for the Shepherd application."""
 
 # Standard Libraries
 import datetime
@@ -12,6 +12,15 @@ from django.db import models
 from django.db.models import Q
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+
+# 3rd Party Libraries
+from taggit.managers import TaggableManager
+
+# Ghostwriter Libraries
+from ghostwriter.shepherd.validators import (
+    validate_inventory_domain_name,
+    validate_inventory_server_name,
+)
 
 
 class HealthStatus(models.Model):
@@ -48,9 +57,7 @@ class DomainStatus(models.Model):
     Stores an individual domain status.
     """
 
-    domain_status = models.CharField(
-        max_length=255, unique=True, help_text="Domain status type (e.g. Available)"
-    )
+    domain_status = models.CharField(max_length=255, unique=True, help_text="Domain status type (e.g. Available)")
 
     def count_status(self):
         """
@@ -101,7 +108,7 @@ class WhoisStatus(models.Model):
 
 class ActivityType(models.Model):
     """
-    Stores an individual acttivity type.
+    Stores an individual activity type.
     """
 
     activity = models.CharField(
@@ -132,12 +139,16 @@ class Domain(models.Model):
     """
 
     name = models.CharField(
-        "Name", max_length=255, unique=True, help_text="Enter the domain name"
+        "Name",
+        max_length=255,
+        unique=True,
+        validators=[validate_inventory_domain_name],
+        help_text="Enter the domain name",
     )
     registrar = models.CharField(
         "Registrar",
         max_length=255,
-        null=True,
+        default="",
         blank=True,
         help_text="Enter the name of the registrar where this domain is registered",
     )
@@ -147,12 +158,8 @@ class Domain(models.Model):
         blank=True,
         help_text="Domain's DNS records in JSON format - e.g., `{'mx': 'record', 'a': 'record',}`",
     )
-    creation = models.DateField(
-        "Purchase Date", help_text="Select the date the domain was purchased"
-    )
-    expiration = models.DateField(
-        "Expiration Date", help_text="Select the date the domain will expire"
-    )
+    creation = models.DateField("Purchase Date", help_text="Select the date the domain was purchased")
+    expiration = models.DateField("Expiration Date", help_text="Select the date the domain will expire")
     last_health_check = models.DateField(
         "Last Health Check",
         help_text="The date and time of the latest health check for this domain name",
@@ -162,7 +169,7 @@ class Domain(models.Model):
     vt_permalink = models.CharField(
         "VirusTotal Permalink",
         max_length=255,
-        null=True,
+        default="",
         blank=True,
         help_text="VirusTotal's permalink for scan results of this domain",
     )
@@ -172,15 +179,15 @@ class Domain(models.Model):
         blank=True,
         help_text="Categories applied to this domain in JSON format - e.g., `{'source': 'category',}`",
     )
-    note = models.TextField(
-        "Notes",
-        null=True,
+    description = models.TextField(
+        "Description",
+        default="",
         blank=True,
         help_text="Use this area to provide notes and thoughts behind its purchase and intended use",
     )
     burned_explanation = models.TextField(
         "Health Explanation",
-        null=True,
+        default="",
         blank=True,
         help_text="Provide details such as how the domain was detected, why it was blacklisted for spam, if it was flagged with a bad category, etc.",
     )
@@ -196,9 +203,11 @@ class Domain(models.Model):
     )
     reset_dns = models.BooleanField(
         "Reset DNS",
-        default=False,
+        default=True,
         help_text="Reset DNS records (if possible) after this domain is used",
     )
+    tags = TaggableManager(blank=True)
+    extra_fields = models.JSONField(default=dict)
     # Foreign Keys
     whois_status = models.ForeignKey(
         "WhoisStatus",
@@ -237,7 +246,7 @@ class Domain(models.Model):
         verbose_name_plural = "Domains"
 
     def natural_key(self):  # pragma: no cover
-        return (self.name,)
+        return self.name
 
     def get_absolute_url(self):
         return reverse("shepherd:domain_detail", args=[str(self.id)])
@@ -254,7 +263,22 @@ class Domain(models.Model):
             time_delta = self.expiration - self.creation
         else:
             time_delta = date.today() - self.creation
-        return "{} days".format(time_delta.days)
+        return time_delta.days
+
+    def get_domain_age_display(self):
+        """Return the domain's age as compact, human-readable elapsed time."""
+        age_in_days = self.get_domain_age()
+        years, remaining_days = divmod(age_in_days, 365)
+
+        if not years:
+            return f"{remaining_days} day{'s' if remaining_days != 1 else ''}"
+
+        year_label = "year" if years == 1 else "years"
+        if not remaining_days:
+            return f"{years} {year_label}"
+
+        day_label = "day" if remaining_days == 1 else "days"
+        return f"{years} {year_label}, {remaining_days} {day_label}"
 
     def is_expired(self):
         """
@@ -277,6 +301,16 @@ class Domain(models.Model):
                 expiring_soon = True
         return expiring_soon
 
+    def may_expire_soon(self):
+        """
+        Check if the domain's expiration DateField value is in the near future, ignoring `auto_renew` status.
+        """
+        expiring_soon = False
+        delta = date.today() + datetime.timedelta(days=30)
+        if self.expiration <= delta:
+            expiring_soon = True
+        return expiring_soon
+
     def __str__(self):
         return f"{self.name} ({self.health_status})"
 
@@ -288,15 +322,11 @@ class History(models.Model):
     and :model:`shepherd.Domain`.
     """
 
-    start_date = models.DateField(
-        "Start Date", help_text="Select the start date of the project"
-    )
-    end_date = models.DateField(
-        "End Date", help_text="Select the end date of the project"
-    )
-    note = models.TextField(
-        "Notes",
-        null=True,
+    start_date = models.DateField("Start Date", help_text="Select the start date of the project")
+    end_date = models.DateField("End Date", help_text="Select the end date of the project")
+    description = models.TextField(
+        "Description",
+        default="",
         blank=True,
         help_text="Use this area to provide project-related notes, such as how the domain will be used/how it worked out",
     )
@@ -348,11 +378,7 @@ class History(models.Model):
         """
         Test if the instance's end_date DateField value is within the next 24-48 hours.
         """
-        if (
-            date.today() == self.end_date
-            or date.today() == datetime.timedelta(days=1)
-            or date.today() > self.end_date
-        ):
+        if date.today() == self.end_date or date.today() == datetime.timedelta(days=1) or date.today() > self.end_date:
             return True
         return False
 
@@ -362,9 +388,7 @@ class ServerStatus(models.Model):
     Stores an individual server status.
     """
 
-    server_status = models.CharField(
-        max_length=255, unique=True, help_text="Server status (e.g. Available)"
-    )
+    server_status = models.CharField(max_length=255, unique=True, help_text="Server status (e.g. Available)")
 
     def count_status(self):
         """
@@ -376,7 +400,6 @@ class ServerStatus(models.Model):
     count = property(count_status)
 
     class Meta:
-
         ordering = ["server_status"]
         verbose_name = "Server status"
         verbose_name_plural = "Server status"
@@ -426,19 +449,22 @@ class StaticServer(models.Model):
         unique=True,
         help_text="Enter the server's static IP address",
     )
-    note = models.TextField(
-        "Notes",
-        null=True,
+    description = models.TextField(
+        "Description",
+        default="",
         blank=True,
         help_text="Use this area to provide server-related notes, such as its designated use or how it can be used",
     )
     name = models.CharField(
         "Name",
         max_length=255,
-        null=True,
+        default="",
         blank=True,
+        validators=[validate_inventory_server_name],
         help_text="Enter the server's name (typically hostname)",
     )
+    tags = TaggableManager(blank=True)
+    extra_fields = models.JSONField(default=dict)
     # Foreign Keys
     server_status = models.ForeignKey(
         ServerStatus,
@@ -452,9 +478,7 @@ class StaticServer(models.Model):
         null=True,
         help_text="Select the service provider for this server",
     )
-    last_used_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
-    )
+    last_used_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
 
     class Meta:
         ordering = ["server_status", "server_provider", "ip_address"]
@@ -495,15 +519,11 @@ class ServerHistory(models.Model):
     :model:`rolodex.Client`, :model:`users.User`, and :model:`shepherd.ServerRole`.
     """
 
-    start_date = models.DateField(
-        "Start Date", help_text="Select the start date of the project"
-    )
-    end_date = models.DateField(
-        "End Date", help_text="Select the end date of the project"
-    )
-    note = models.TextField(
-        "Notes",
-        null=True,
+    start_date = models.DateField("Start Date", help_text="Select the start date of the project")
+    end_date = models.DateField("End Date", help_text="Select the end date of the project")
+    description = models.TextField(
+        "Description",
+        default="",
         blank=True,
         help_text="Use this area to provide project-related notes, such as how the server/IP will be used",
     )
@@ -575,11 +595,7 @@ class ServerHistory(models.Model):
         """
         Test if the instance's ``end_date`` DateField value is within the next 24-48 hours.
         """
-        if (
-            date.today() == self.end_date
-            or date.today() == datetime.timedelta(days=1)
-            or date.today() > self.end_date
-        ):
+        if date.today() == self.end_date or date.today() == datetime.timedelta(days=1) or date.today() > self.end_date:
             return True
         return False
 
@@ -595,7 +611,7 @@ class TransientServer(models.Model):
     ip_address = models.GenericIPAddressField(
         "IP Address",
         max_length=255,
-        unique=True,
+        unique=False,
         help_text="Enter the server IP address",
     )
     aux_address = ArrayField(
@@ -616,13 +632,13 @@ class TransientServer(models.Model):
     name = models.CharField(
         "Name",
         max_length=255,
-        null=True,
+        default="",
         blank=True,
         help_text="Enter the server's name (typically hostname)",
     )
-    note = models.TextField(
-        "Notes",
-        null=True,
+    description = models.TextField(
+        "Description",
+        default="",
         blank=True,
         help_text="Use this area to provide project-related notes, such as how the server will be used",
     )
@@ -650,14 +666,12 @@ class TransientServer(models.Model):
         "ServerRole",
         on_delete=models.PROTECT,
         null=False,
-        blank=True,
         help_text="Select the role this VPS will play",
     )
     activity_type = models.ForeignKey(
         "ActivityType",
         on_delete=models.PROTECT,
         null=False,
-        blank=True,
         help_text="Select how this VPS will be used",
     )
 
@@ -675,13 +689,13 @@ class DomainServerConnection(models.Model):
     Stores an individual link between one :model:`shepherd.Domain` and one
     :model:`shepherd.StaticServer` or :model:`shepherd.TransientServer`.
 
-    Each link is associated with an one :model:`rolodex.Project`.
+    Each link is associated with one :model:`rolodex.Project`.
     """
 
     endpoint = models.CharField(
         "CDN Endpoint",
         max_length=255,
-        null=True,
+        default="",
         blank=True,
         help_text="The CDN endpoint used with this link, if any",
     )
@@ -689,7 +703,6 @@ class DomainServerConnection(models.Model):
         "Subdomain",
         max_length=255,
         blank=True,
-        null=True,
         default="*",
         help_text="The subdomain used for this domain record",
     )
@@ -699,22 +712,17 @@ class DomainServerConnection(models.Model):
         on_delete=models.CASCADE,
         help_text="Select the domain to link to one of the servers provisioned for this project",
     )
-    static_server = models.ForeignKey(
-        "ServerHistory", on_delete=models.CASCADE, null=True, blank=True
-    )
-    transient_server = models.ForeignKey(
-        "TransientServer", on_delete=models.CASCADE, null=True, blank=True
-    )
+    static_server = models.ForeignKey("ServerHistory", on_delete=models.CASCADE, null=True, blank=True)
+    transient_server = models.ForeignKey("TransientServer", on_delete=models.CASCADE, null=True, blank=True)
 
     class Meta:
-
         ordering = ["project", "domain"]
         verbose_name = "Domain and server record"
         verbose_name_plural = "Domain and server records"
 
         constraints = [
             models.CheckConstraint(
-                check=(Q(static_server__isnull=False) & Q(transient_server__isnull=True))
+                condition=(Q(static_server__isnull=False) & Q(transient_server__isnull=True))
                 | (Q(static_server__isnull=True) & Q(transient_server__isnull=False)),
                 name="only_one_server",
             )
@@ -722,9 +730,7 @@ class DomainServerConnection(models.Model):
 
     def clean(self):
         if self.static_server and self.transient_server:
-            raise ValidationError(
-                _("Only one server can be selected per entry"), code="invalid_selection"
-            )
+            raise ValidationError(_("Only one server can be selected per entry"), code="invalid_selection")
 
     @property
     def domain_name(self):
@@ -744,20 +750,16 @@ class DomainNote(models.Model):
     Stores an individual domain note, related to :model:`shepherd.Domain` and :model:`users.User`.
     """
 
-    timestamp = models.DateField(
-        "Timestamp", auto_now_add=True, help_text="Creation timestamp"
-    )
+    timestamp = models.DateField("Timestamp", auto_now_add=True, help_text="Creation timestamp")
     note = models.TextField(
         "Notes",
-        null=True,
+        default="",
         blank=True,
         help_text="Use this area to add a note to this domain",
     )
     # Foreign Keys
     domain = models.ForeignKey(Domain, on_delete=models.CASCADE, null=False)
-    operator = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
-    )
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
 
     class Meta:
         ordering = ["domain", "-timestamp"]
@@ -773,20 +775,16 @@ class ServerNote(models.Model):
     Stores an individual server note, related to :model:`shepherd.StaticServer` and :model:`users.User`.
     """
 
-    timestamp = models.DateField(
-        "Timestamp", auto_now_add=True, help_text="Creation timestamp"
-    )
+    timestamp = models.DateField("Timestamp", auto_now_add=True, help_text="Creation timestamp")
     note = models.TextField(
         "Notes",
-        null=True,
+        default="",
         blank=True,
         help_text="Use this area to add a note to this server",
     )
     # Foreign Keys
     server = models.ForeignKey("StaticServer", on_delete=models.CASCADE, null=False)
-    operator = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
-    )
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
 
     class Meta:
         ordering = ["server", "-timestamp"]

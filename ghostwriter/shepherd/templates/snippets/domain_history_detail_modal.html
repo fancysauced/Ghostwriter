@@ -1,0 +1,28 @@
+{% load extra_fields bleach_tags %}
+
+<div id="domain_history_detail_{{ checkout.id }}" class="modal fade detail-preview-modal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-super-sized modal-dialog-scrollable modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <span class="detail-preview-modal-eyebrow">Domain checkout</span>
+          <h2 class="modal-title">Checkout notes</h2>
+        </div>
+        <button type="button" class="btn-close detail-preview-modal-close" data-bs-dismiss="modal" aria-label="Close">
+        </button>
+      </div>
+      <div class="modal-body extra-field-modal-content">
+
+      {% if checkout.note %}
+        {{ checkout.note|bleach }}
+      {% else %}
+        <p>No notes for this checkout.</p>
+      {% endif %}
+
+      </div>
+      <div class="modal-footer detail-preview-modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

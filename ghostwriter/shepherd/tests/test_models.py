@@ -43,10 +43,6 @@ class HealthStatusModelTests(TestCase):
         # Read
         self.assertEqual(status.health_status, "Healthy")
         self.assertEqual(status.pk, status.id)
-        self.assertQuerysetEqual(
-            self.HealthStatus.objects.all(),
-            [f"<HealthStatus: {status}>"],
-        )
 
         # Update
         status.health_status = "Burned"
@@ -82,10 +78,6 @@ class DomainStatusModelTests(TestCase):
         # Read
         self.assertEqual(status.domain_status, "Available")
         self.assertEqual(status.pk, status.id)
-        self.assertQuerysetEqual(
-            self.DomainStatus.objects.all(),
-            [f"<DomainStatus: {status}>"],
-        )
 
         # Update
         status.domain_status = "Unavailable"
@@ -121,10 +113,6 @@ class WhoisStatusModelTests(TestCase):
         # Read
         self.assertEqual(status.whois_status, "Enabled")
         self.assertEqual(status.pk, status.id)
-        self.assertQuerysetEqual(
-            self.WhoisStatus.objects.all(),
-            [f"<WhoisStatus: {status}>"],
-        )
 
         # Update
         status.whois_status = "Unknown"
@@ -160,10 +148,6 @@ class ActivityTypeModelTests(TestCase):
         # Read
         self.assertEqual(activity_type.activity, "Phishing")
         self.assertEqual(activity_type.pk, activity_type.id)
-        self.assertQuerysetEqual(
-            self.ActivityType.objects.all(),
-            [f"<ActivityType: {activity_type}>"],
-        )
 
         # Update
         activity_type.activity = "C2"
@@ -189,10 +173,6 @@ class DomainModelTests(TestCase):
         # Read
         self.assertEqual(domain.name, "ghostwriter.wiki")
         self.assertEqual(domain.pk, domain.id)
-        self.assertQuerysetEqual(
-            self.Domain.objects.all(),
-            [f"<Domain: {domain.name} ({domain.health_status})>"],
-        )
 
         # Update
         domain.name = "SpecterOps. io"
@@ -207,7 +187,7 @@ class DomainModelTests(TestCase):
         domain = DomainFactory()
         try:
             domain.get_absolute_url()
-        except:
+        except Exception:
             self.fail("Domain.get_absolute_url() raised an exception")
 
     def test_method_get_domain_age(self):
@@ -216,18 +196,31 @@ class DomainModelTests(TestCase):
         domain = DomainFactory(creation=creation, expiration=renewed, expired=False)
 
         expired = date.today() - timedelta(days=1)
-        expired_domain = DomainFactory(
-            creation=creation, expiration=expired, expired=True, auto_renew=False
-        )
+        expired_domain = DomainFactory(creation=creation, expiration=expired, expired=True, auto_renew=False)
 
         try:
             age = domain.get_domain_age()
-            self.assertEqual(age, "360 days")
+            self.assertEqual(age, 360)
 
             age = expired_domain.get_domain_age()
-            self.assertEqual(age, "359 days")
+            self.assertEqual(age, 359)
         except Exception:
             self.fail("Domain model `get_domain_age` method failed unexpectedly!")
+
+    def test_method_get_domain_age_display(self):
+        domain = DomainFactory(
+            creation=date.today() - timedelta(days=628),
+            expiration=date.today() + timedelta(days=1),
+            expired=False,
+        )
+        young_domain = DomainFactory(
+            creation=date.today() - timedelta(days=1),
+            expiration=date.today() + timedelta(days=1),
+            expired=False,
+        )
+
+        self.assertEqual(domain.get_domain_age_display(), "1 year, 263 days")
+        self.assertEqual(young_domain.get_domain_age_display(), "1 day")
 
     def test_method_is_expired(self):
         creation = date.today() - timedelta(days=361)
@@ -265,6 +258,24 @@ class DomainModelTests(TestCase):
         except Exception:
             self.fail("Domain model `is_expiring_soon` method failed unexpectedly!")
 
+    def test_method_may_expire_soon(self):
+        creation = date.today() - timedelta(days=345)
+        expiration = date.today() + timedelta(days=15)
+        domain = DomainFactory(creation=creation, expiration=expiration, auto_renew=False)
+
+        try:
+            self.assertEqual(True, domain.may_expire_soon())
+
+            domain.auto_renew = True
+            domain.save()
+            self.assertEqual(True, domain.may_expire_soon())
+
+            domain.expiration = date.today() + timedelta(days=31)
+            domain.save()
+            self.assertEqual(False, domain.may_expire_soon())
+        except Exception:
+            self.fail("Domain model `may_expire_soon` method failed unexpectedly!")
+
 
 class HistoryModelTests(TestCase):
     """Collection of tests for :model:`shepherd.History`."""
@@ -282,10 +293,6 @@ class HistoryModelTests(TestCase):
         # Read
         self.assertEqual(entry.domain.name, "ghostwriter.wiki")
         self.assertEqual(entry.pk, entry.id)
-        self.assertQuerysetEqual(
-            self.History.objects.all(),
-            [f"<History: {entry.project} : {entry.domain.name}>"],
-        )
 
         # Update
         entry.end_date = date.today()
@@ -300,7 +307,7 @@ class HistoryModelTests(TestCase):
         checkout = HistoryFactory()
         try:
             checkout.get_absolute_url()
-        except:
+        except Exception:
             self.fail("History.get_absolute_url() raised an exception")
 
     def test_method_will_be_released(self):
@@ -326,19 +333,17 @@ class HistoryModelTests(TestCase):
         two_weeks = today + timedelta(days=14)
 
         history_1 = HistoryFactory(start_date=today, end_date=tomorrow, domain=domain)
-        history_2 = HistoryFactory(
-            start_date=next_week, end_date=two_weeks, domain=domain
-        )
+        history_2 = HistoryFactory(start_date=next_week, end_date=two_weeks, domain=domain)
 
         # Deleting this older checkout should not impact the domain's status
         history_1.delete()
         domain.refresh_from_db()
-        self.assertTrue(domain.domain_status == self.unavailable_status)
+        self.assertEqual(domain.domain_status, self.unavailable_status)
 
         # Deleting this newer checkout should impact the domain's status
         history_2.delete()
         domain.refresh_from_db()
-        self.assertTrue(domain.domain_status == self.available_status)
+        self.assertEqual(domain.domain_status, self.available_status)
 
 
 class ServerStatusModelTests(TestCase):
@@ -355,10 +360,6 @@ class ServerStatusModelTests(TestCase):
         # Read
         self.assertEqual(status.server_status, "Available")
         self.assertEqual(status.pk, status.id)
-        self.assertQuerysetEqual(
-            self.ServerStatus.objects.all(),
-            [f"<ServerStatus: {status}>"],
-        )
 
         # Update
         status.server_status = "Unavailable"
@@ -394,10 +395,6 @@ class ServerProviderModelTests(TestCase):
         # Read
         self.assertEqual(provider.server_provider, "Digital Ocean")
         self.assertEqual(provider.pk, provider.id)
-        self.assertQuerysetEqual(
-            self.ServerProvider.objects.all(),
-            [f"<ServerProvider: {provider.server_provider}>"],
-        )
 
         # Update
         provider.server_provider = "AWS"
@@ -433,10 +430,6 @@ class ServerRoleModelTests(TestCase):
         # Read
         self.assertEqual(role.server_role, "Redirector")
         self.assertEqual(role.pk, role.id)
-        self.assertQuerysetEqual(
-            self.ServerRole.objects.all(),
-            [f"<ServerRole: {role.server_role}>"],
-        )
 
         # Update
         role.server_role = "Payload Delivery"
@@ -462,12 +455,6 @@ class StaticServerModelTests(TestCase):
         # Read
         self.assertEqual(server.ip_address, "192.168.1.100")
         self.assertEqual(server.pk, server.id)
-        self.assertQuerysetEqual(
-            self.StaticServer.objects.all(),
-            [
-                f"<StaticServer: {server.ip_address} ({server.name}) [{server.server_provider}]>"
-            ],
-        )
 
         # Update
         server.ip_address = "192.168.2.200"
@@ -482,7 +469,7 @@ class StaticServerModelTests(TestCase):
         server = StaticServerFactory()
         try:
             server.get_absolute_url()
-        except:
+        except Exception:
             self.fail("StaticServer.get_absolute_url() raised an exception")
 
 
@@ -500,12 +487,6 @@ class TransientServerModelTests(TestCase):
         # Read
         self.assertEqual(server.ip_address, "192.168.1.100")
         self.assertEqual(server.pk, server.id)
-        self.assertQuerysetEqual(
-            self.TransientServer.objects.all(),
-            [
-                f"<TransientServer: {server.ip_address} ({server.name}) [{server.server_provider}]>"
-            ],
-        )
 
         # Update
         server.ip_address = "192.168.2.200"
@@ -531,10 +512,6 @@ class AuxServerAddressModelTests(TestCase):
         # Read
         self.assertEqual(server.ip_address, "192.168.1.100")
         self.assertEqual(server.pk, server.id)
-        self.assertQuerysetEqual(
-            self.AuxServerAddress.objects.all(),
-            [f"<AuxServerAddress: {server.ip_address}>"],
-        )
 
         # Update
         server.ip_address = "192.168.2.200"
@@ -562,12 +539,6 @@ class ServerHistoryModelTests(TestCase):
         # Read
         self.assertEqual(entry.server.name, "teamserver.local")
         self.assertEqual(entry.pk, entry.id)
-        self.assertQuerysetEqual(
-            self.ServerHistory.objects.all(),
-            [
-                f"<ServerHistory: {entry.server.ip_address} ({entry.server.name}) [{entry.activity_type}]>"
-            ],
-        )
 
         # Update
         entry.end_date = date.today()
@@ -582,13 +553,11 @@ class ServerHistoryModelTests(TestCase):
         checkout = ServerHistoryFactory()
         try:
             checkout.get_absolute_url()
-        except:
+        except Exception:
             self.fail("ServerHistory.get_absolute_url() raised an exception")
 
     def test_property_ip_address(self):
-        entry = ServerHistoryFactory(
-            server=StaticServerFactory(ip_address="192.168.1.100")
-        )
+        entry = ServerHistoryFactory(server=StaticServerFactory(ip_address="192.168.1.100"))
 
         try:
             self.assertEqual(entry.ip_address, "192.168.1.100")
@@ -621,9 +590,7 @@ class ServerHistoryModelTests(TestCase):
             entry.save()
             self.assertEqual(True, entry.will_be_released())
         except Exception:
-            self.fail(
-                "ServerHistory model `will_be_released` method failed unexpectedly!"
-            )
+            self.fail("ServerHistory model `will_be_released` method failed unexpectedly!")
 
     def test_delete_signal(self):
         server = StaticServerFactory(server_status=self.unavailable_status)
@@ -633,22 +600,18 @@ class ServerHistoryModelTests(TestCase):
         next_week = today + timedelta(days=7)
         two_weeks = today + timedelta(days=14)
 
-        history_1 = ServerHistoryFactory(
-            start_date=today, end_date=tomorrow, server=server
-        )
-        history_2 = ServerHistoryFactory(
-            start_date=next_week, end_date=two_weeks, server=server
-        )
+        history_1 = ServerHistoryFactory(start_date=today, end_date=tomorrow, server=server)
+        history_2 = ServerHistoryFactory(start_date=next_week, end_date=two_weeks, server=server)
 
         # Deleting this older checkout should not impact the server's status
         history_1.delete()
         server.refresh_from_db()
-        self.assertTrue(server.server_status == self.unavailable_status)
+        self.assertEqual(server.server_status, self.unavailable_status)
 
         # Deleting this newer checkout should impact the server's status
         history_2.delete()
         server.refresh_from_db()
-        self.assertTrue(server.server_status == self.available_status)
+        self.assertEqual(server.server_status, self.available_status)
 
 
 class DomainServerConnectionModelTests(TestCase):
@@ -665,14 +628,6 @@ class DomainServerConnectionModelTests(TestCase):
         # Read
         self.assertEqual(entry.subdomain, "wiki")
         self.assertEqual(entry.pk, entry.id)
-
-        server = f"{entry.static_server}{entry.transient_server}"
-        self.assertQuerysetEqual(
-            self.DomainServerConnection.objects.all(),
-            [
-                f"<DomainServerConnection: {entry.subdomain}.{entry.domain} used with {server}>"
-            ],
-        )
 
         # Update
         entry.ip_address = "192.168.2.200"
@@ -692,9 +647,7 @@ class DomainServerConnectionModelTests(TestCase):
             entry.save()
 
     def test_property_domain_name(self):
-        entry = DomainServerConnectionFactory(
-            domain=HistoryFactory(domain=DomainFactory(name="ghostwriter.wiki"))
-        )
+        entry = DomainServerConnectionFactory(domain=HistoryFactory(domain=DomainFactory(name="ghostwriter.wiki")))
 
         try:
             self.assertEqual(entry.domain_name, "ghostwriter.wiki")
@@ -702,9 +655,7 @@ class DomainServerConnectionModelTests(TestCase):
             entry.domain.domain.save()
             self.assertEqual(entry.domain_name, "getghostwriter.io")
         except Exception:
-            self.fail(
-                "DomainServerConnection model `domain_name` property failed unexpectedly!"
-            )
+            self.fail("DomainServerConnection model `domain_name` property failed unexpectedly!")
 
 
 class DomainNoteModelTests(TestCase):

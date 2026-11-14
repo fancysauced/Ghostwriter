@@ -6,7 +6,7 @@ from django.contrib import admin
 # 3rd Party Libraries
 from import_export.admin import ImportExportModelAdmin
 
-from .models import (
+from ghostwriter.shepherd.models import (
     ActivityType,
     AuxServerAddress,
     Domain,
@@ -24,7 +24,7 @@ from .models import (
     TransientServer,
     WhoisStatus,
 )
-from .resources import DomainResource, StaticServerResource
+from ghostwriter.shepherd.resources import DomainResource, StaticServerResource
 
 
 def enable_dns_resets(modeladmin, request, queryset):
@@ -89,7 +89,7 @@ class HistoryAdmin(admin.ModelAdmin):
             "Domain Use Information",
             {"fields": ("operator", "activity_type", "start_date", "end_date")},
         ),
-        ("Misc", {"fields": ("note",)}),
+        ("Misc", {"fields": ("description",)}),
     )
 
 
@@ -117,7 +117,7 @@ class DomainAdmin(ImportExportModelAdmin):
         "last_health_check",
         "registrar",
         "reset_dns",
-        "note",
+        "tag_list",
     )
     list_filter = (
         "domain_status",
@@ -126,12 +126,26 @@ class DomainAdmin(ImportExportModelAdmin):
         "registrar",
         "auto_renew",
         "reset_dns",
+        "tags",
     )
     list_display_links = ("domain_status", "name")
     list_editable = ("reset_dns",)
-    readonly_fields = ('last_health_check',)
+    readonly_fields = ("last_health_check",)
     fieldsets = (
-        ("General Information", {"fields": ("name", "domain_status", "creation", "expiration", "auto_renew")}),
+        (
+            "General Information",
+            {
+                "fields": (
+                    "name",
+                    "domain_status",
+                    "creation",
+                    "expiration",
+                    "expired",
+                    "auto_renew",
+                    "tags",
+                )
+            },
+        ),
         (
             "Health Status",
             {
@@ -153,8 +167,15 @@ class DomainAdmin(ImportExportModelAdmin):
                 )
             },
         ),
-        ("Misc", {"fields": ("note",)}),
+        ("Misc", {"fields": ("description",)}),
+        ("Extras", {"fields": ("extra_fields",)}),
     )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("tags")
+
+    def tag_list(self, obj):
+        return ", ".join(o.name for o in obj.tags.all())
 
 
 @admin.register(HealthStatus)
@@ -192,7 +213,7 @@ class ServerHistoryRoleAdmin(admin.ModelAdmin):
                 )
             },
         ),
-        ("Misc", {"fields": ("note",)}),
+        ("Misc", {"fields": ("description",)}),
     )
 
 
@@ -227,18 +248,33 @@ class StaticServerAdmin(ImportExportModelAdmin):
     fieldsets = (
         (
             "Basic Server Information",
-            {"fields": ("ip_address", "name", "server_status", "server_provider")},
+            {
+                "fields": (
+                    "ip_address",
+                    "name",
+                    "server_status",
+                    "server_provider",
+                    "tags",
+                )
+            },
         ),
         (
             "Misc",
             {
                 "fields": (
                     "last_used_by",
-                    "note",
+                    "description",
                 )
             },
         ),
+        ("Extras", {"fields": ("extra_fields",)}),
     )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("tags")
+
+    def tag_list(self, obj):
+        return ", ".join(o.name for o in obj.tags.all())
 
 
 @admin.register(TransientServer)
@@ -259,7 +295,7 @@ class TransientServerRoleAdmin(admin.ModelAdmin):
             "Server Use Information",
             {"fields": ("server_provider", "server_role", "activity_type", "operator")},
         ),
-        ("Misc", {"fields": ("note",)}),
+        ("Misc", {"fields": ("description",)}),
     )
 
 

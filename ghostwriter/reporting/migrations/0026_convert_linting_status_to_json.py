@@ -14,19 +14,20 @@ def convert_to_jsonfield(apps, schema_editor):
         try:
             entry.lint_result = json.loads(entry.lint_result)
             entry.save()
-        except:
+        except (TypeError, ValueError):
             entry.lint_result = {
-                    "result": "unknown",
-                    "warnings": ["Need to re-run linting following your Ghostwriter upgrade",],
-                    "errors": []
-                }
+                "result": "unknown",
+                "warnings": [
+                    "Need to re-run linting following your Ghostwriter upgrade",
+                ],
+                "errors": [],
+            }
             entry.save()
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('reporting', '0025_alter_reporttemplate_lint_result'),
+        ("reporting", "0025_alter_reporttemplate_lint_result"),
     ]
 
     operations = [

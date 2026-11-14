@@ -1,12 +1,26 @@
 # Standard Libraries
 import logging
+from datetime import datetime
+from datetime import timezone as datetime_timezone
+from unittest.mock import patch
 
 # Django Imports
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from django.utils import timezone
 
 # Ghostwriter Libraries
-from ghostwriter.factories import OplogEntryFactory, OplogFactory, ProjectFactory
-from ghostwriter.oplog.forms import OplogEntryForm, OplogForm
+from ghostwriter.factories import (
+    EvidenceFactory,
+    OplogEntryFactory,
+    OplogFactory,
+    ProjectAssignmentFactory,
+    ProjectFactory,
+    ReportFactory,
+    UserFactory,
+)
+from ghostwriter.modules.model_utils import to_dict
+from ghostwriter.oplog.forms import OplogEntryForm, OplogEvidenceForm, OplogForm
 
 logging.disable(logging.CRITICAL)
 
@@ -18,18 +32,20 @@ class OplogFormTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        pass
+        cls.user = UserFactory(password=PASSWORD)
 
     def setUp(self):
         pass
 
     def form_data(
         self,
+        user=None,
         name=None,
         project_id=None,
         **kwargs,
     ):
         return OplogForm(
+            user=user,
             data={
                 "name": name,
                 "project": project_id,
@@ -39,7 +55,12 @@ class OplogFormTests(TestCase):
     def test_valid_data(self):
         project = ProjectFactory()
         oplog = OplogFactory.build(project=project)
-        form = self.form_data(**oplog.__dict__)
+        form = self.form_data(user=self.user, **oplog.__dict__)
+        self.assertFalse(form.is_valid())
+        self.assertEqual(form.errors.as_data()["project"][0].code, "invalid_choice")
+
+        ProjectAssignmentFactory(operator=self.user, project=project)
+        form = self.form_data(user=self.user, **oplog.__dict__)
         self.assertTrue(form.is_valid())
 
 
@@ -67,6 +88,8 @@ class OplogEntryFormTests(TestCase):
         output=None,
         comments=None,
         operator_name=None,
+        oplog_kwarg=None,
+        instance=None,
         **kwargs,
     ):
         return OplogEntryForm(
@@ -84,9 +107,170 @@ class OplogEntryFormTests(TestCase):
                 "comments": comments,
                 "operator_name": operator_name,
             },
+            oplog=oplog_kwarg,
+            instance=instance,
         )
 
     def test_valid_data(self):
         entry = OplogEntryFactory.build()
-        form = self.form_data(**entry.__dict__, oplog_id=self.oplog.id)
+        form = self.form_data(**to_dict(entry), oplog_kwarg=self.oplog)
+        self.assertTrue(form.is_valid())
+
+    def test_valid_update_data(self):
+        entry = OplogEntryFactory.create()
+        form = self.form_data(**to_dict(entry), instance=entry)
+        self.assertTrue(form.is_valid())
+
+    def test_command_and_output_are_plaintext_fields(self):
+        form = OplogEntryForm(oplog=self.oplog)
+
+        self.assertIn("no-auto-rich-text", form.fields["command"].widget.attrs["class"])
+        self.assertIn("no-auto-rich-text", form.fields["output"].widget.attrs["class"])
+        self.assertNotIn(
+            "no-auto-rich-text",
+            form.fields["description"].widget.attrs.get("class", ""),
+        )
+        self.assertNotIn(
+            "no-auto-rich-text", form.fields["comments"].widget.attrs.get("class", "")
+        )
+        self.assertIn(
+            "gw-tiptap-compact", form.fields["description"].widget.attrs["class"]
+        )
+        self.assertIn(
+            "gw-tiptap-compact", form.fields["comments"].widget.attrs["class"]
+        )
+
+    @patch("ghostwriter.oplog.forms.timezone.now")
+    def test_datetime_initials_use_active_timezone(self, mock_now):
+        mock_now.return_value = datetime(
+            2026,
+            1,
+            15,
+            20,
+            30,
+            45,
+            tzinfo=datetime_timezone.utc,
+        )
+
+        with timezone.override("America/Los_Angeles"):
+            form = OplogEntryForm(oplog=self.oplog)
+
+            self.assertEqual(
+                form["start_date"].value().strftime("%Y-%m-%dT%H:%M:%S"),
+                "2026-01-15T12:30:45",
+            )
+            self.assertEqual(
+                form["end_date"].value().strftime("%Y-%m-%dT%H:%M:%S"),
+                "2026-01-15T12:30:45",
+            )
+
+    def test_invalid_data(self):
+        entry = OplogEntryFactory.create()
+        start_date = entry.start_date
+        entry.start_date = None
+        entry.end_date = None
+        entry.save()
+        entry.refresh_from_db()
+        form = self.form_data(**to_dict(entry), instance=entry)
+        self.assertTrue(form.is_valid())
+
+        entry.start_date = start_date
+        entry.save()
+        entry.refresh_from_db()
+        form = self.form_data(**to_dict(entry), instance=entry)
+        self.assertTrue(form.is_valid())
+
+
+class OplogEvidenceFormTests(TestCase):
+    """Collection of tests for :form:`oplog.OplogEvidenceForm`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.project = ProjectFactory()
+        cls.report = ReportFactory(project=cls.project)
+
+    def test_report_queryset_filtered_to_project(self):
+        other_project = ProjectFactory()
+        other_report = ReportFactory(project=other_project)
+        form = OplogEvidenceForm(project=self.project)
+        qs = form.fields["report"].queryset
+        self.assertIn(self.report, qs)
+        self.assertNotIn(other_report, qs)
+
+    def test_document_uses_resource_upload_input(self):
+        form = OplogEvidenceForm(project=self.project)
+
+        self.assertEqual(
+            form.fields["document"].widget.attrs["class"],
+            "resource-file-input",
+        )
+
+    def test_report_auto_selected_first_when_no_active(self):
+        form = OplogEvidenceForm(project=self.project)
+        self.assertEqual(form.fields["report"].initial, self.report)
+
+    def test_report_auto_selected_first_when_multiple_no_active(self):
+        _ = ReportFactory(project=self.project)
+        form = OplogEvidenceForm(project=self.project)
+        first_in_list = form.fields["report"].queryset.first()
+        self.assertEqual(form.fields["report"].initial, first_in_list)
+
+    def test_active_report_selected_when_valid_for_project(self):
+        form = OplogEvidenceForm(project=self.project, active_report_id=self.report.pk)
+        self.assertEqual(form.fields["report"].initial, self.report)
+
+    def test_active_report_ignored_when_not_in_project(self):
+        other_report = ReportFactory()  # different project
+        form = OplogEvidenceForm(project=self.project, active_report_id=other_report.pk)
+        # Falls back to first report in the project
+        first_in_list = form.fields["report"].queryset.first()
+        self.assertEqual(form.fields["report"].initial, first_in_list)
+
+    def test_active_report_invalid_id_falls_back_to_first(self):
+        form = OplogEvidenceForm(project=self.project, active_report_id=999999)
+        first_in_list = form.fields["report"].queryset.first()
+        self.assertEqual(form.fields["report"].initial, first_in_list)
+
+    def test_report_required(self):
+        form = OplogEvidenceForm(project=self.project, data={
+            "friendly_name": "Test Evidence",
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn("report", form.errors)
+
+    def test_clean_rejects_duplicate_friendly_name(self):
+        """Submitting evidence with a friendly name already used in the same report triggers a ValidationError."""
+        EvidenceFactory(friendly_name="Duplicate Evidence", report=self.report)
+        file = SimpleUploadedFile("evidence.png", b"img data", content_type="image/png")
+        form = OplogEvidenceForm(
+            project=self.project,
+            data={"friendly_name": "Duplicate Evidence", "report": self.report.pk, "caption": "Test"},
+            files={"document": file},
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("__all__", form.errors)
+        self.assertIn("friendly name already exists", form.errors["__all__"][0])
+
+    def test_clean_allows_same_friendly_name_different_report(self):
+        """Same friendly name on a different report is allowed."""
+        other_report = ReportFactory(project=self.project)
+        EvidenceFactory(friendly_name="Shared Name", report=self.report)
+        file = SimpleUploadedFile("evidence.png", b"img data", content_type="image/png")
+        form = OplogEvidenceForm(
+            project=self.project,
+            data={"friendly_name": "Shared Name", "report": other_report.pk, "caption": "Test"},
+            files={"document": file},
+        )
+        self.assertTrue(form.is_valid())
+
+    def test_clean_allows_update_existing_instance(self):
+        """Updating an existing evidence instance does not falsely trigger the duplicate check."""
+        evidence = EvidenceFactory(friendly_name="Existing Evidence", report=self.report)
+        file = SimpleUploadedFile("evidence.png", b"img data", content_type="image/png")
+        form = OplogEvidenceForm(
+            project=self.project,
+            data={"friendly_name": "Existing Evidence", "report": self.report.pk, "caption": "Updated"},
+            files={"document": file},
+            instance=evidence,
+        )
         self.assertTrue(form.is_valid())

@@ -2,7 +2,15 @@ table:
   name: shepherd_domainserverconnection
   schema: public
 configuration:
-  comment: null
+  column_config:
+    domain_id:
+      custom_name: domainId
+    project_id:
+      custom_name: projectId
+    static_server_id:
+      custom_name: staticServerId
+    transient_server_id:
+      custom_name: transientServerId
   custom_column_names:
     domain_id: domainId
     project_id: projectId
@@ -11,231 +19,150 @@ configuration:
   custom_name: domainServerConnection
   custom_root_fields: {}
 object_relationships:
-- name: cloudServer
-  using:
-    foreign_key_constraint_on: transient_server_id
-- name: domain
-  using:
-    foreign_key_constraint_on: domain_id
-- name: project
-  using:
-    foreign_key_constraint_on: project_id
-- name: staticServer
-  using:
-    foreign_key_constraint_on: static_server_id
+  - name: cloudServer
+    using:
+      foreign_key_constraint_on: transient_server_id
+  - name: domain
+    using:
+      foreign_key_constraint_on: domain_id
+  - name: project
+    using:
+      foreign_key_constraint_on: project_id
+  - name: staticServer
+    using:
+      foreign_key_constraint_on: static_server_id
 insert_permissions:
-- permission:
-    backend_only: false
-    check: {}
-    columns:
-    - domain_id
-    - endpoint
-    - project_id
-    - static_server_id
-    - subdomain
-    - transient_server_id
-  role: manager
-- permission:
-    check:
-      project:
-        _or:
-        - assignments:
-            operator_id:
-              _eq: X-Hasura-User-Id
-        - invites:
-            user_id:
-              _eq: X-Hasura-User-Id
-        - client:
-            invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-    columns:
-    - domain_id
-    - endpoint
-    - project_id
-    - static_server_id
-    - subdomain
-    - transient_server_id
-  role: restricted
-- permission:
-    check:
-      project:
-        _or:
-        - assignments:
-            operator_id:
-              _eq: X-Hasura-User-Id
-        - invites:
-            user_id:
-              _eq: X-Hasura-User-Id
-        - client:
-            invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-    columns:
-    - domain_id
-    - endpoint
-    - project_id
-    - static_server_id
-    - subdomain
-    - transient_server_id
-  role: user
+  - role: manager
+    permission:
+      check: {}
+      columns:
+        - domain_id
+        - endpoint
+        - project_id
+        - static_server_id
+        - subdomain
+        - transient_server_id
+  - role: user
+    permission:
+      check:
+        project:
+          _or:
+            - assignments:
+                operator_id:
+                  _eq: X-Hasura-User-Id
+            - invites:
+                user_id:
+                  _eq: X-Hasura-User-Id
+            - client:
+                invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+      columns:
+        - domain_id
+        - endpoint
+        - project_id
+        - static_server_id
+        - subdomain
+        - transient_server_id
 select_permissions:
-- permission:
-    columns:
-    - domain_id
-    - id
-    - project_id
-    - static_server_id
-    - transient_server_id
-    - endpoint
-    - subdomain
-    filter: {}
-  role: manager
-- permission:
-    columns: "*"
-    filter:
-      project:
-        _or:
-        - assignments:
-            operator_id:
-              _eq: X-Hasura-User-Id
-        - invites:
-            user_id:
-              _eq: X-Hasura-User-Id
-        - client:
-            invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-  role: restricted
-- permission:
-    columns: "*"
-    filter:
-      project:
-        _or:
-        - assignments:
-            operator_id:
-              _eq: X-Hasura-User-Id
-        - invites:
-            user_id:
-              _eq: X-Hasura-User-Id
-        - client:
-            invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-  role: user
+  - role: manager
+    permission:
+      columns:
+        - domain_id
+        - id
+        - project_id
+        - static_server_id
+        - transient_server_id
+        - endpoint
+        - subdomain
+      filter: {}
+  - role: service
+    permission:
+      columns: '*'
+      filter:
+        project:
+          serviceTokenProjectAccesses:
+            token_id:
+              _eq: X-Hasura-Service-Token-Id
+  - role: user
+    permission:
+      columns: '*'
+      filter:
+        project:
+          _or:
+            - assignments:
+                operator_id:
+                  _eq: X-Hasura-User-Id
+            - invites:
+                user_id:
+                  _eq: X-Hasura-User-Id
+            - client:
+                invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
 update_permissions:
-- permission:
-    check: {}
-    columns:
-    - domain_id
-    - endpoint
-    - project_id
-    - static_server_id
-    - subdomain
-    - transient_server_id
-    filter: {}
-  role: manager
-- permission:
-    check:
-      project:
-        _or:
-        - assignments:
-            operator_id:
-              _eq: X-Hasura-User-Id
-        - invites:
-            user_id:
-              _eq: X-Hasura-User-Id
-        - client:
-            invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-    columns:
-    - domain_id
-    - endpoint
-    - project_id
-    - static_server_id
-    - subdomain
-    - transient_server_id
-    filter:
-      project:
-        _or:
-        - assignments:
-            operator_id:
-              _eq: X-Hasura-User-Id
-        - invites:
-            user_id:
-              _eq: X-Hasura-User-Id
-        - client:
-            invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-  role: restricted
-- permission:
-    check:
-      project:
-        _or:
-        - assignments:
-            operator_id:
-              _eq: X-Hasura-User-Id
-        - invites:
-            user_id:
-              _eq: X-Hasura-User-Id
-        - client:
-            invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-    columns:
-    - domain_id
-    - endpoint
-    - project_id
-    - static_server_id
-    - subdomain
-    - transient_server_id
-    filter:
-      project:
-        _or:
-        - assignments:
-            operator_id:
-              _eq: X-Hasura-User-Id
-        - invites:
-            user_id:
-              _eq: X-Hasura-User-Id
-        - client:
-            invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-  role: user
+  - role: manager
+    permission:
+      columns:
+        - domain_id
+        - endpoint
+        - project_id
+        - static_server_id
+        - subdomain
+        - transient_server_id
+      filter: {}
+      check: {}
+  - role: user
+    permission:
+      columns:
+        - domain_id
+        - endpoint
+        - project_id
+        - static_server_id
+        - subdomain
+        - transient_server_id
+      filter:
+        project:
+          _or:
+            - assignments:
+                operator_id:
+                  _eq: X-Hasura-User-Id
+            - invites:
+                user_id:
+                  _eq: X-Hasura-User-Id
+            - client:
+                invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+      check:
+        project:
+          _or:
+            - assignments:
+                operator_id:
+                  _eq: X-Hasura-User-Id
+            - invites:
+                user_id:
+                  _eq: X-Hasura-User-Id
+            - client:
+                invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
 delete_permissions:
-- permission:
-    filter: {}
-  role: manager
-- permission:
-    filter:
-      project:
-        _or:
-        - assignments:
-            operator_id:
-              _eq: X-Hasura-User-Id
-        - invites:
-            user_id:
-              _eq: X-Hasura-User-Id
-        - client:
-            invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-  role: restricted
-- permission:
-    filter:
-      project:
-        _or:
-        - assignments:
-            operator_id:
-              _eq: X-Hasura-User-Id
-        - invites:
-            user_id:
-              _eq: X-Hasura-User-Id
-        - client:
-            invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-  role: user
+  - role: manager
+    permission:
+      filter: {}
+  - role: user
+    permission:
+      filter:
+        project:
+          _or:
+            - assignments:
+                operator_id:
+                  _eq: X-Hasura-User-Id
+            - invites:
+                user_id:
+                  _eq: X-Hasura-User-Id
+            - client:
+                invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id

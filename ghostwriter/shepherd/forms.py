@@ -1,4 +1,4 @@
-"""This contains all of the forms used by the Shepherd application."""
+"""This contains all the forms used by the Shepherd application."""
 
 # Standard Libraries
 from datetime import date
@@ -10,14 +10,17 @@ from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
 # 3rd Party Libraries
+from crispy_forms.bootstrap import TabHolder
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, ButtonHolder, Column, Div, Layout, Row, Submit
 
 # Ghostwriter Libraries
-from ghostwriter.modules.custom_layout_object import SwitchToggle
+from ghostwriter.api.utils import get_client_list
+from ghostwriter.commandcenter.forms import ExtraFieldsField
+from ghostwriter.modules.custom_layout_object import CustomTab, SwitchToggle
+from ghostwriter.modules.reportwriter.forms import JinjaRichTextField
 from ghostwriter.rolodex.models import Project
-
-from .models import (
+from ghostwriter.shepherd.models import (
     Domain,
     DomainNote,
     DomainServerConnection,
@@ -36,26 +39,31 @@ class CheckoutForm(forms.ModelForm):
 
     class Meta:
         model = History
-        fields = "__all__"
+        exclude = ("operator",)
         widgets = {
             "domain": forms.HiddenInput(),
             "start_date": forms.DateInput(
-                format=("%Y-%m-%d"),
+                format="%Y-%m-%d",
             ),
             "end_date": forms.DateInput(
-                format=("%Y-%m-%d"),
+                format="%Y-%m-%d",
             ),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, user=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         data_projects_url = reverse("shepherd:ajax_load_projects")
         data_project_url = reverse("shepherd:ajax_load_project")
         overwatch_url = reverse("shepherd:ajax_domain_overwatch")
+
         for field in self.fields:
             self.fields[field].widget.attrs["autocomplete"] = "off"
+
+        clients = get_client_list(user)
+        self.fields["client"].queryset = clients
         self.fields["client"].empty_label = "-- Select a Client --"
         self.fields["client"].label = ""
+
         self.fields["activity_type"].empty_label = "-- Select Activity --"
         self.fields["activity_type"].label = ""
         self.fields["project"].empty_label = "-- Select a Client First --"
@@ -63,13 +71,10 @@ class CheckoutForm(forms.ModelForm):
         self.fields["project"].queryset = Project.objects.none()
         self.fields["start_date"].widget.input_type = "date"
         self.fields["end_date"].widget.input_type = "date"
-        self.fields["note"].widget.attrs[
-            "placeholder"
-        ] = "This domain will be used for..."
-        self.fields["note"].label = ""
+        self.fields["description"].widget.attrs["placeholder"] = "This domain will be used for..."
+        self.fields["description"].label = ""
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.form_class = "newitem"
         self.helper.form_show_labels = False
         self.helper.form_show_errors = False
         self.helper.attrs = {
@@ -88,9 +93,9 @@ class CheckoutForm(forms.ModelForm):
             "client",
             "project",
             Row(
-                Column("start_date", css_class="form-group col-md-6 mb-0"),
-                Column("end_date", css_class="form-group col-md-6 mb-0"),
-                css_class="form-row",
+                Column("start_date", css_class="col-md-6 mb-0"),
+                Column("end_date", css_class="col-md-6 mb-0"),
+                css_class="row g-3",
             ),
             "activity_type",
             HTML(
@@ -99,15 +104,16 @@ class CheckoutForm(forms.ModelForm):
                 <hr>
                 """
             ),
-            "note",
+            "description",
             "domain",
             ButtonHolder(
-                Submit("submit", "Submit", css_class="btn btn-primary col-md-4"),
-                HTML(
-                    """
-                    <button onclick="window.location.href='{{ cancel_link }}'" class="btn btn-outline-secondary col-md-4" type="button">Cancel</button>
-                    """
+                HTML("""<a href="{{ cancel_link }}" class="btn btn-outline-secondary">Cancel</a>"""),
+                Submit(
+                    "submit",
+                    "Save Changes" if self.instance.pk else "Check Out Domain",
+                    css_class="btn btn-primary",
                 ),
+                css_class="resource-form-actions resource-form-actions-compact",
             ),
         )
 
@@ -115,15 +121,11 @@ class CheckoutForm(forms.ModelForm):
         if "client" in self.data:
             try:
                 client_id = int(self.data.get("client"))
-                self.fields["project"].queryset = Project.objects.filter(
-                    client_id=client_id
-                ).order_by("codename")
+                self.fields["project"].queryset = Project.objects.filter(client_id=client_id).order_by("codename")
             except (ValueError, TypeError):  # pragma: no cover
                 pass
         elif self.instance.pk:
-            self.fields["project"].queryset = self.instance.client.project_set.order_by(
-                "codename"
-            )
+            self.fields["project"].queryset = self.instance.client.project_set.order_by("codename")
 
     def clean_end_date(self):
         end_date = self.cleaned_data["end_date"]
@@ -131,9 +133,7 @@ class CheckoutForm(forms.ModelForm):
 
         # Check if end_date comes before the start_date
         if end_date < start_date:
-            raise ValidationError(
-                _("The provided end date comes before the start date"), code="invalid"
-            )
+            raise ValidationError(_("The provided end date comes before the start date."), code="invalid")
         return end_date
 
     def clean_domain(self):
@@ -142,14 +142,11 @@ class CheckoutForm(forms.ModelForm):
 
         if insert:
             unavailable = DomainStatus.objects.get(domain_status="Unavailable")
-            expired = domain.expiration < date.today()
-            if expired:
+            if (domain.expiration < date.today() and domain.auto_renew is False) or domain.expired:
                 raise ValidationError(_("This domain has expired!"), code="expired")
             if domain.domain_status == unavailable:
                 raise ValidationError(
-                    _(
-                        "Someone beat you to it – This domain has already been checked out!"
-                    ),
+                    _("Someone beat you to it – This domain has already been checked out!"),
                     code="unavailable",
                 )
         return domain
@@ -159,6 +156,8 @@ class DomainForm(forms.ModelForm):
     """
     Save an individual :model:`shepherd.Domain`.
     """
+
+    extra_fields = ExtraFieldsField(Domain._meta.label)
 
     class Meta:
         model = Domain
@@ -171,105 +170,144 @@ class DomainForm(forms.ModelForm):
         )
         widgets = {
             "creation": forms.DateInput(
-                format=("%Y-%m-%d"),
+                format="%Y-%m-%d",
             ),
             "expiration": forms.DateInput(
-                format=("%Y-%m-%d"),
+                format="%Y-%m-%d",
             ),
+        }
+        field_classes = {
+            "description": JinjaRichTextField,
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         for field in self.fields:
             self.fields[field].widget.attrs["autocomplete"] = "off"
-        self.fields["name"].widget.attrs["placeholder"] = "Domain"
-        self.fields["name"].label = ""
-        self.fields["registrar"].widget.attrs["placeholder"] = "Registrar"
-        self.fields["registrar"].label = ""
+        self.fields["name"].widget.attrs["placeholder"] = "ghostwriter.wiki"
+        self.fields["registrar"].widget.attrs["placeholder"] = "Namecheap"
         self.fields["domain_status"].empty_label = "-- Select Status --"
-        self.fields["domain_status"].label = ""
         self.fields["whois_status"].empty_label = "-- Select Status --"
-        self.fields["whois_status"].label = ""
         self.fields["health_status"].empty_label = "-- Select Status --"
-        self.fields["health_status"].label = ""
         self.fields["creation"].widget.input_type = "date"
         self.fields["expiration"].widget.input_type = "date"
-        self.fields["note"].widget.attrs[
-            "placeholder"
-        ] = "Brief Note or Explanation of the Domain"
-        self.fields["note"].label = ""
+        self.fields["description"].widget.attrs["placeholder"] = "This domain was purchased for..."
+        self.fields["description"].label = ""
+        self.fields["tags"].widget.attrs["placeholder"] = "phishing, categorized, ..."
+        self.fields["name"].label = "Domain Name"
+        self.fields["whois_status"].label = "WHOIS Status"
+        self.fields["health_status"].label = "Health Status"
+        self.fields["extra_fields"].label = ""
+
+        has_extra_fields = bool(self.fields["extra_fields"].specs)
+
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.form_class = "newitem"
-        self.helper.form_show_labels = False
         self.helper.form_show_errors = False
         self.helper.form_id = "checkout-form"
         self.helper.layout = Layout(
-            HTML(
-                """
-                <h4 class="icon domain-icon">Domain Information</h4>
-                <hr>
-                """
+            TabHolder(
+                CustomTab(
+                    "Domain Information",
+                    HTML(
+                        """
+                        <div class="form-section-heading mb-3">
+                            <h2>Domain identity</h2>
+                            <p>Record ownership, lifecycle, and library metadata for this reusable asset.</p>
+                        </div>
+                        """
+                    ),
+                    Row(
+                        Column("name", css_class="col-md-6 mb-0"),
+                        Column("registrar", css_class="col-md-6 mb-0"),
+                        css_class="row g-3",
+                    ),
+                    Row(
+                        Column("domain_status", css_class="col-md-6 mb-0"),
+                        Column("tags", css_class="col-md-6 mb-0"),
+                        css_class="row g-3",
+                    ),
+                    Row(
+                        Column("creation", css_class="col-md-6 mb-0"),
+                        Column("expiration", css_class="col-md-6 mb-0"),
+                        css_class="row g-3",
+                    ),
+                    Div(
+                        Div(SwitchToggle("auto_renew"), css_class="resource-toggle-item"),
+                        Div(SwitchToggle("reset_dns"), css_class="resource-toggle-item"),
+                        css_class="resource-toggle-grid resource-toggle-grid-two mb-3",
+                    ),
+                    "description",
+                    link_css_class="icon domain-icon",
+                    css_id="domain",
+                ),
+                CustomTab(
+                    "Health",
+                    HTML(
+                        """
+                        <div class="form-section-heading mb-3">
+                            <h2>Health and categorization</h2>
+                            <p>Track external reputation signals that determine whether this domain is safe to use.</p>
+                        </div>
+                        """
+                    ),
+                    Row(
+                        Column("whois_status", css_class="col-md-6 mb-0"),
+                        Column("health_status", css_class="col-md-6 mb-0"),
+                        css_class="row g-3",
+                    ),
+                    link_css_class="icon heartbeat-icon",
+                    css_id="health",
+                ),
+                *(
+                    [
+                        CustomTab(
+                            "Extra Fields",
+                            "extra_fields",
+                            link_css_class="icon custom-field-icon",
+                            css_id="extra-fields",
+                        )
+                    ]
+                    if has_extra_fields
+                    else []
+                ),
+                template="tab.html",
+                css_class="nav-justified",
+                css_id="tab-bar",
             ),
-            "name",
-            Row(
-                Column("domain_status", css_class="form-group col-md-6 mb-0"),
-                Column("registrar", css_class="form-group col-md-6 mb-0"),
-                css_class="form-row",
-            ),
-            Row(
-                Column("creation", css_class="form-group col-md-6 mb-0"),
-                Column("expiration", css_class="form-group col-md-6 mb-0"),
-                css_class="form-row",
-            ),
-            Row(
-                Column(SwitchToggle("auto_renew"), css_class="form-group col-md-6 mb-0"),
-                Column(SwitchToggle("reset_dns"), css_class="form-group col-md-6 mb-0"),
-                css_class="form-row",
-            ),
-            HTML(
-                """
-                <h4 class="icon heartbeat-icon">Health & Category Information</h4>
-                <hr>
-                """
-            ),
-            Row(
-                Column("whois_status", css_class="form-group col-md-6 mb-0"),
-                Column("health_status", css_class="form-group col-md-6 mb-0"),
-                css_class="form-row",
-            ),
-            Row(
-                Column("bluecoat_cat", css_class="form-group col-md-6 mb-0"),
-                Column("fortiguard_cat", css_class="form-group col-md-6 mb-0"),
-                css_class="form-row",
-            ),
-            Row(
-                Column("ibm_xforce_cat", css_class="form-group col-md-6 mb-0"),
-                Column("trendmicro_cat", css_class="form-group col-md-6 mb-0"),
-                css_class="form-row",
-            ),
-            Row(
-                Column("opendns_cat", css_class="form-group col-md-6 mb-0"),
-                Column("talos_cat", css_class="form-group col-md-6 mb-0"),
-                css_class="form-row",
-            ),
-            "mx_toolbox_status",
-            HTML(
-                """
-                <h4 class="icon comment-icon">Additional Information</h4>
-                <hr>
-                """
-            ),
-            "note",
-            ButtonHolder(
-                Submit("submit", "Submit", css_class="btn btn-primary col-md-4"),
+            Div(
                 HTML(
                     """
-                    <button onclick="window.location.href='{{ cancel_link }}'" class="btn btn-outline-secondary col-md-4" type="button">Cancel</button>
+                    <span class="resource-form-actions-context">
+                        {% if object.pk %}Editing {{ object.name }}{% else %}Adding a domain{% endif %}
+                    </span>
                     """
                 ),
+                Div(
+                    HTML("""<a href="{{ cancel_link }}" class="btn btn-outline-secondary">Cancel</a>"""),
+                    Submit(
+                        "submit",
+                        "Save Changes" if self.instance.pk else "Add Domain",
+                        css_class="btn btn-primary",
+                    ),
+                    css_class="resource-form-actions-buttons",
+                ),
+                css_class="resource-form-actions",
             ),
         )
+
+    def clean_name(self):
+        name = self.cleaned_data["name"]
+        try:
+            domain = Domain.objects.get(name=name.lower())
+        except Domain.DoesNotExist:
+            return name
+        if domain.pk != self.instance.pk:
+            raise ValidationError(
+                _("Domain names must be unique and this one already exists in the library."),
+                code="unique",
+            )
+        return name
 
     def clean(self):
         expiration = self.cleaned_data["expiration"]
@@ -278,7 +316,7 @@ class DomainForm(forms.ModelForm):
         # Check if expiration comes before the creation date
         if expiration < creation:
             raise ValidationError(
-                _("The provided expiration date comes before the purchase date"),
+                _("The provided expiration date comes before the purchase date."),
                 code="invalid_date",
             )
 
@@ -292,47 +330,35 @@ class DomainLinkForm(forms.ModelForm):
 
     class Meta:
         model = DomainServerConnection
-        fields = "__all__"
-        widgets = {
-            "project": forms.HiddenInput(),
-        }
+        exclude = ("project",)
 
     def __init__(self, project=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if project:
-            self.fields["static_server"].queryset = ServerHistory.objects.filter(
-                project=project
-            ).order_by("activity_type", "server_role")
-            self.fields["transient_server"].queryset = TransientServer.objects.filter(
-                project=project
-            ).order_by("activity_type", "server_role")
-            self.fields["domain"].queryset = History.objects.filter(
-                project=project
-            ).order_by("activity_type")
+            self.fields["static_server"].queryset = ServerHistory.objects.filter(project=project).order_by(
+                "activity_type", "server_role"
+            )
+            self.fields["transient_server"].queryset = TransientServer.objects.filter(project=project).order_by(
+                "activity_type", "server_role"
+            )
+            self.fields["domain"].queryset = History.objects.filter(project=project).order_by("activity_type")
         for field in self.fields:
             self.fields[field].widget.attrs["autocomplete"] = "off"
         self.fields["domain"].empty_label = "-- Select a Domain [Required] --"
-        self.fields[
-            "domain"
-        ].label_from_instance = lambda obj: f"{obj.domain.name} ({obj.activity_type})"
+        self.fields["domain"].label_from_instance = lambda obj: f"{obj.domain.name} ({obj.activity_type})"
 
         self.fields["static_server"].empty_label = "-- Select Static Server --"
         self.fields[
             "static_server"
-        ].label_from_instance = (
-            lambda obj: f"{obj.server.ip_address} ({obj.server_role} | {obj.activity_type})"
-        )
+        ].label_from_instance = lambda obj: f"{obj.server.ip_address} ({obj.server_role} | {obj.activity_type})"
 
         self.fields["transient_server"].empty_label = "-- Select VPS --"
         self.fields[
             "transient_server"
-        ].label_from_instance = (
-            lambda obj: f"{obj.ip_address} ({obj.server_role} | {obj.activity_type})"
-        )
+        ].label_from_instance = lambda obj: f"{obj.ip_address} ({obj.server_role} | {obj.activity_type})"
 
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.form_class = "newitem"
         self.helper.form_show_errors = False
         self.helper.form_show_labels = False
         self.helper.layout = Layout(
@@ -351,35 +377,32 @@ class DomainLinkForm(forms.ModelForm):
             "endpoint",
             HTML(
                 """
-                <p>Finally, select either a static server checked-out for this project <em>or</em> a transient server to associate with the selected domain:</p>
+                <p>Finally, select either a static server checked-out for this project
+                <em>or</em> a transient server to associate with the selected domain:</p>
                 """
             ),
             Row(
-                Column("static_server", css_class="form-group col-md-6 mb-0"),
-                Column("transient_server", css_class="form-group col-md-6 mb-0"),
-                css_class="form-row",
+                Column("static_server", css_class="col-md-6 mb-0"),
+                Column("transient_server", css_class="col-md-6 mb-0"),
+                css_class="row g-3",
             ),
             "project",
             ButtonHolder(
-                Submit("submit", "Submit", css_class="btn btn-primary col-md-4"),
-                HTML(
-                    """
-                    <button onclick="window.location.href='{{ cancel_link }}'" class="btn btn-outline-secondary col-md-4" type="button">Cancel</button>
-                    """
+                HTML("""<a href="{{ cancel_link }}" class="btn btn-outline-secondary">Cancel</a>"""),
+                Submit(
+                    "submit",
+                    "Save Connection" if self.instance.pk else "Create Connection",
+                    css_class="btn btn-primary",
                 ),
+                css_class="resource-form-actions resource-form-actions-compact",
             ),
         )
 
     def clean(self):
         if self.cleaned_data["static_server"] and self.cleaned_data["transient_server"]:
-            raise ValidationError(_("Select only one server"), code="invalid_selection")
-        if (
-            not self.cleaned_data["static_server"]
-            and not self.cleaned_data["transient_server"]
-        ):
-            raise ValidationError(
-                _("You must select one server"), code="invalid_selection"
-            )
+            raise ValidationError(_("Select only one server."), code="invalid_selection")
+        if not self.cleaned_data["static_server"] and not self.cleaned_data["transient_server"]:
+            raise ValidationError(_("You must select one server."), code="invalid_selection")
 
 
 class DomainNoteForm(forms.ModelForm):
@@ -389,7 +412,6 @@ class DomainNoteForm(forms.ModelForm):
     """
 
     class Meta:
-
         model = DomainNote
         fields = ("note",)
 
@@ -397,18 +419,19 @@ class DomainNoteForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.form_class = "newitem"
-        self.helper.form_show_labels = False
-        self.helper.form_show_errors = False
+        self.helper.form_show_labels = True
         self.helper.layout = Layout(
-            Div("note"),
-            ButtonHolder(
-                Submit("submit", "Submit", css_class="btn btn-primary col-md-4"),
+            Div("note", css_class="resource-note-field"),
+            Div(
                 HTML(
-                    """
-                    <button onclick="window.location.href='{{ cancel_link }}'" class="btn btn-outline-secondary col-md-4" type="button">Cancel</button>
-                    """
+                    """<span class="resource-form-actions-context">{% if object.pk %}Editing note{% else %}Adding note{% endif %}</span>"""
                 ),
+                Div(
+                    HTML("""<a href="{{ cancel_link }}" class="btn btn-outline-secondary">Cancel</a>"""),
+                    Submit("submit", "Save Note", css_class="btn btn-primary"),
+                    css_class="resource-form-actions-buttons",
+                ),
+                css_class="resource-form-actions resource-note-actions",
             ),
         )
 
@@ -417,7 +440,7 @@ class DomainNoteForm(forms.ModelForm):
         # Check if note is empty
         if not note:
             raise ValidationError(
-                _("You must provide some content for the note"),
+                _("You must provide some content for the note."),
                 code="required",
             )
         return note
@@ -434,22 +457,20 @@ class BurnForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["burned_explanation"].widget.attrs[
-            "placeholder"
-        ] = "This domain was flagged for..."
+        self.fields["burned_explanation"].widget.attrs["placeholder"] = "This domain was flagged for..."
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.form_class = "newitem"
         self.helper.form_show_labels = False
         self.helper.form_show_errors = False
         self.helper.layout = Layout(
             "burned_explanation",
             ButtonHolder(
-                Submit("submit", "Submit", css_class="btn btn-primary col-md-4"),
                 HTML(
                     """
-                    <button onclick="window.location.href='{{ cancel_link }}'" class="btn btn-outline-secondary col-md-4" type="button">Cancel</button>
+                    <a href="{{ cancel_link }}" class="btn btn-outline-secondary">Cancel</a>
                     """
                 ),
+                Submit("submit", "Mark as Burned", css_class="btn btn-primary"),
+                css_class="resource-form-actions resource-form-actions-compact",
             ),
         )

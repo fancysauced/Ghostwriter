@@ -1,17 +1,19 @@
-"""This contains all of the URL mappings used by the Rolodex application."""
+"""This contains all the URL mappings used by the Rolodex application."""
 
 # Django Imports
 from django.urls import path
+from django.views.decorators.csrf import csrf_exempt
 
-from . import views
+# Ghostwriter Libraries
+from ghostwriter.rolodex import views
 
 app_name = "rolodex"
 
 # URLs for the basic views
 urlpatterns = [
     path("", views.index, name="index"),
-    path("clients/", views.client_list, name="clients"),
-    path("projects/", views.project_list, name="projects"),
+    path("clients/", views.ClientListView.as_view(), name="clients"),
+    path("projects/", views.ProjectListView.as_view(), name="projects"),
 ]
 
 # URLs for AJAX requests – deletion and toggle views
@@ -52,6 +54,11 @@ urlpatterns += [
         name="ajax_delete_project_objective",
     ),
     path(
+        "ajax/project/deconfliction/delete/<int:pk>",
+        views.DeconflictionDelete.as_view(),
+        name="ajax_delete_project_deconfliction",
+    ),
+    path(
         "ajax/project/assignment/delete/<int:pk>",
         views.ProjectAssignmentDelete.as_view(),
         name="ajax_delete_project_assignment",
@@ -67,6 +74,16 @@ urlpatterns += [
         name="ajax_delete_client_poc",
     ),
     path(
+        "ajax/client/invite/delete/<int:pk>",
+        views.ClientInviteDelete.as_view(),
+        name="ajax_delete_client_invite",
+    ),
+    path(
+        "ajax/project/invite/delete/<int:pk>",
+        views.ProjectInviteDelete.as_view(),
+        name="ajax_delete_project_invite",
+    ),
+    path(
         "ajax/client/note/delete/<int:pk>",
         views.ClientNoteDelete.as_view(),
         name="ajax_delete_client_note",
@@ -75,6 +92,16 @@ urlpatterns += [
         "ajax/project/refresh/<int:pk>",
         views.update_project_badges,
         name="ajax_update_project_badges",
+    ),
+    path(
+        "ajax/project/contacts/refresh/<int:pk>",
+        views.update_project_contacts,
+        name="ajax_update_project_contacts",
+    ),
+    path(
+        "ajax/contact/assign/<int:pk>",
+        csrf_exempt(views.AssignProjectContact.as_view()),
+        name="ajax_assign_project_contact",
     ),
     path(
         "ajax/client/refresh/<int:pk>",
@@ -126,6 +153,21 @@ urlpatterns += [
         views.ProjectTaskRefresh.as_view(),
         name="ajax_update_objective_tasks",
     ),
+    path(
+        "ajax/projects/export/<int:pk>/<str:type_or_template_id>",
+        views.GenerateProjectReport.as_view(),
+        name="ajax_project_generate_report",
+    ),
+    path(
+        "ajax/bloodhound-test",
+        views.BloodhoundApiTestView.as_view(),
+        name="ajax_bloodhound_test",
+    ),
+    path(
+        "ajax/bloodhound-fetch",
+        views.BloodhoundApiFetchView.as_view(),
+        name="ajax_bloodhound_fetch",
+    ),
 ]
 
 # URLs for :model:`Client` Class Based Views
@@ -135,6 +177,12 @@ urlpatterns += [
     path("clients/update/<int:pk>", views.ClientUpdate.as_view(), name="client_update"),
     path("clients/delete/<int:pk>", views.ClientDelete.as_view(), name="client_delete"),
     path(
+        "clients/<int:pk>/extra-field-json/<str:extra_field_name>",
+        views.ClientExtraFieldJson.as_view(),
+        name="client_extra_field_json",
+    ),
+
+    path(
         "clients/notes/create/<int:pk>",
         views.ClientNoteCreate.as_view(),
         name="client_note_add",
@@ -143,6 +191,11 @@ urlpatterns += [
         "clients/notes/update/<int:pk>",
         views.ClientNoteUpdate.as_view(),
         name="client_note_edit",
+    ),
+    path(
+        "clients/logo/download/<int:pk>",
+        views.ClientLogoDownload.as_view(),
+        name="client_logo_download",
     ),
 ]
 
@@ -154,9 +207,7 @@ urlpatterns += [
         views.ProjectCreate.as_view(),
         name="project_create_no_client",
     ),
-    path(
-        "projects/create/<int:pk>", views.ProjectCreate.as_view(), name="project_create"
-    ),
+    path("projects/create/<int:pk>", views.ProjectCreate.as_view(), name="project_create"),
     path(
         "projects/update/<int:pk>",
         views.ProjectUpdate.as_view(),
@@ -176,5 +227,30 @@ urlpatterns += [
         "projects/notes/update/<int:pk>",
         views.ProjectNoteUpdate.as_view(),
         name="project_note_edit",
+    ),
+    path(
+        "projects/deconfliction/create/<int:pk>",
+        views.DeconflictionCreate.as_view(),
+        name="project_deconfliction_create",
+    ),
+    path(
+        "projects/deconfliction/update/<int:pk>",
+        views.DeconflictionUpdate.as_view(),
+        name="project_deconfliction_update",
+    ),
+    path(
+        "projects/update/components/<int:pk>",
+        views.ProjectComponentsUpdate.as_view(),
+        name="project_component_update",
+    ),
+    path(
+        "projects/<int:pk>/extra-field-json/<str:extra_field_name>",
+        views.ProjectExtraFieldJson.as_view(),
+        name="project_extra_field_json",
+    ),
+    path(
+        "projects/<int:pk>/extra-field-richtext/<str:extra_field_name>",
+        views.ProjectExtraFieldRichTextPreview.as_view(),
+        name="project_extra_field_richtext",
     ),
 ]

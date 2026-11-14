@@ -1,0 +1,95 @@
+{% extends "base_generic.html" %}
+{% load i18n %}
+{% load crispy_forms_tags %}
+
+{% block pagetitle %}{% trans "Set up an authenticator app" %}{% endblock %}
+
+
+{% block content %}
+  <div class="resource-form-shell account-profile-editor account-mfa-activation">
+    <form method="post" action="{% url 'mfa_activate_totp' %}" class="resource-edit-form account-mfa-activation-form">
+      {% csrf_token %}
+
+      {% if form.errors %}
+        <div class="alert alert-danger account-security-alert" role="alert">
+          <div class="account-security-alert-icon" aria-hidden="true"><i class="fas fa-exclamation-circle"></i></div>
+          <div>
+            <strong>{% trans "Authenticator app not enabled" %}</strong>
+            <p>{% trans "Check the verification code and try again." %}</p>
+            {% if form.non_field_errors %}{{ form.non_field_errors }}{% endif %}
+          </div>
+        </div>
+      {% endif %}
+
+      <section class="resource-form-card account-mfa-activation-card" aria-labelledby="mfa-activation-heading">
+        <div class="resource-form-section-heading">
+          <span class="resource-form-section-icon account-mfa-card-icon" aria-hidden="true">
+            <i class="fas fa-shield-alt"></i>
+          </span>
+          <div>
+            <h1 id="mfa-activation-heading">{% trans "Set up an authenticator app" %}</h1>
+            <p>{% trans "Add a second sign-in check to protect your Ghostwriter account." %}</p>
+          </div>
+        </div>
+
+        <ol class="account-mfa-steps">
+          <li class="account-mfa-step">
+            <div class="account-mfa-step-heading">
+              <span class="account-mfa-step-number" aria-hidden="true">1</span>
+              <div>
+                <h2>{% trans "Connect your app" %}</h2>
+                <p>{% trans "Scan this QR code with your authenticator app." %}</p>
+              </div>
+            </div>
+
+            <div class="account-mfa-enrollment">
+              <div class="account-mfa-qr-frame">
+                <img
+                  class="totp-qr-code"
+                  src="{{ totp_svg_data_uri }}"
+                  alt="{% trans 'QR code for adding Ghostwriter to an authenticator app' %}"
+                >
+              </div>
+              <div class="account-mfa-manual-key">
+                <span class="account-mfa-manual-label">{% trans "Cannot scan the code?" %}</span>
+                <p>{% trans "Enter this setup key in your authenticator app instead." %}</p>
+                <code>{{ form.secret }}</code>
+              </div>
+            </div>
+          </li>
+
+          <li class="account-mfa-step">
+            <div class="account-mfa-step-heading">
+              <span class="account-mfa-step-number" aria-hidden="true">2</span>
+              <div>
+                <h2>{% trans "Confirm the connection" %}</h2>
+                <p>{% trans "Use the latest code shown in your authenticator app." %}</p>
+              </div>
+            </div>
+
+            <div class="account-mfa-code-field">
+              {{ form.code|as_crispy_field }}
+            </div>
+            <div class="account-mfa-code-note">
+              <i class="fas fa-clock" aria-hidden="true"></i>
+              <span>{% trans "Codes refresh regularly. If one expires, enter the next code that appears." %}</span>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <div class="resource-form-actions resource-form-actions-compact account-mfa-actions">
+        <div class="resource-form-actions-buttons">
+          {% if request.user.require_mfa %}
+            <a class="btn btn-outline-secondary" href="{% url 'account_logout' %}">{% trans "Sign out" %}</a>
+          {% else %}
+            <a class="btn btn-outline-secondary" href="{% url 'mfa_index' %}">{% trans "Cancel" %}</a>
+          {% endif %}
+          <button class="btn btn-primary" type="submit">
+            <i class="fas fa-shield-alt" aria-hidden="true"></i> {% trans "Verify and enable" %}
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+{% endblock %}

@@ -1,0 +1,131 @@
+{% load bleach_tags %}
+
+{% comment %} Contacts Section {% endcomment %}
+<header class="content-section-header">
+  <div class="content-section-heading">
+    <h4>Project Points of Contact</h4>
+    <p class="content-section-intro">Create project-specific contacts here or assign an existing contact from the client. Add reusable contacts to the client record first.</p>
+  </div>
+  <a class="icon edit-icon btn btn-primary btn-sm"
+     href="{% url 'rolodex:project_component_update' project.id %}#contacts">Add & Edit Contacts</a>
+</header>
+
+{% if project.projectcontact_set.all %}
+  <div class="table-responsive data-table-frame">
+    <table id="contactTable" class="tablesorter table">
+    <thead>
+    <th class="align-middle pe-4 text-start">Primary</th>
+    <th class="align-middle pe-4 text-start">Name</th>
+    <th class="align-middle pe-4 text-start">Title/Role</th>
+    <th class="sorter-false align-middle pe-4 text-start">Email</th>
+    <th class="sorter-false align-middle text-start">Phone</th>
+    <th class="sorter-false align-middle text-start">Note</th>
+    </thead>
+    {% for contact in project.projectcontact_set.all %}
+      <tr>
+        <td class="align-middle text-start">{% if contact.primary %}<i class="fas fa-check healthy"><span class="visually-hidden">Primary</span></i>{% else %}<span class="visually-hidden">Not Primary</span>{% endif %}</td>
+        <td class="align-middle text-start">{{ contact.name }}</td>
+        <td class="align-middle text-start">{% if contact.job_title %}{{ contact.job_title }}{% else %}<span class="missing-value">Not provided</span>{% endif %}</td>
+        <td class="align-middle text-start">{% if contact.email %}{{ contact.email }}{% else %}<span class="missing-value">Not provided</span>{% endif %}</td>
+        <td class="align-middle text-start">
+          {% if contact.phone %}
+            {{ contact.phone }}
+          {% else %}
+            <span class="missing-value">Not provided</span>
+          {% endif %}
+        </td>
+        <td class="align-middle text-start">
+          <button
+            type="button"
+            class="table-row-action"
+            data-bs-toggle="modal"
+            data-bs-target="#client_contact_detail_{{ contact.id }}"
+            title="View contact details"
+            aria-label="View contact details for {{ contact.name }}"
+          ><i class="fas fa-eye" aria-hidden="true"></i></button>
+        </td>
+      </tr>
+    {% endfor %}
+    </table>
+  </div>
+  {% for contact in project.projectcontact_set.all %}
+    {% include "snippets/client_contact_detail_modal.html" with poc=contact %}
+  {% endfor %}
+{% else %}
+  <div class="empty-state">
+    <p class="empty-state-title">No project contacts yet</p>
+    <p class="empty-state-description">Assign client contacts who should receive project-specific communication.</p>
+  </div>
+{% endif %}
+
+<section class="detail-panel project-contact-assigner" aria-labelledby="assign-client-contact-heading">
+  <div class="detail-panel-header">
+    <div>
+      <span class="detail-eyebrow">Client Directory</span>
+      <h5 id="assign-client-contact-heading">Assign an Existing Contact</h5>
+    </div>
+  </div>
+  <form id="assign-project-contact-form" action="{% url 'rolodex:ajax_assign_project_contact' project.id %}"
+        method="POST">
+    <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+    <div class="project-contact-assign-form">
+      <select id="id_client_contact" class="form-select" aria-label="Assign project contact">
+        {% if client_contacts %}
+          <option value="-1" selected>Choose a client contact</option>
+          {% for contact in client_contacts %}
+            <option value="{{ contact.id }}">{{ contact.name }}</option>
+          {% endfor %}
+        {% else %}
+          <option value="-1" selected>No other contacts available</option>
+        {% endif %}
+      </select>
+      <button id="assign-btn" type="submit" class="btn btn-primary" disabled="disabled">Assign</button>
+    </div>
+  </form>
+</section>
+
+<script>
+  {% comment %} Create a new project point of contact from a client contact {% endcomment %}
+  $(document).ready(function () {
+    $('#id_client_contact').change(function () {
+      let option = $(this).val();
+      if (option === '-1') {
+        $('#assign-btn').prop('disabled', true);
+      } else {
+        $('#assign-btn').prop('disabled', false);
+      }
+    });
+    $('#assign-project-contact-form').submit(function (e) {
+      e.preventDefault();
+      let url = $(this).attr('action');
+      let $contact = $('#id_client_contact')
+      let contactId = $contact.val();
+      let csrftoken = $('input[name=csrfmiddlewaretoken]').val();
+      if ($contact.val() === '') {
+        contactId = -1
+      }
+      $.ajaxSetup({
+        beforeSend: function (xhr, settings) {
+          if (!csrfSafeMethod(settings.type) && !this.crossDomain) {
+            xhr.setRequestHeader('X-CSRFToken', csrftoken);
+          }
+        }
+      });
+      $.ajax({
+        url: url,
+        type: 'POST',
+        dataType: 'json',
+        data: {
+          'contact': contactId,
+          'csrfmiddlewaretoken': csrftoken,
+        },
+        success: function (data) {
+          if (data['message']) {
+            displayToastTop({type: data['result'], string: data['message'], title: 'Contacts Update'});
+          }
+          update_project_contacts();
+        },
+      });
+    });
+  });
+</script>

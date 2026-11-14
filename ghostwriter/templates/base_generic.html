@@ -1,750 +1,1199 @@
-{% load static i18n compress custom_tags %}
+{% load static i18n compress custom_tags settings_tags bleach_tags %}
+
+{% get_solo "commandcenter.BannerConfiguration" as banner_config %}
 
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
 
-        <title>{% block title %}Ghostwriter{% endblock %}</title>
+  <title>{% block title %}Ghostwriter{% endblock %}</title>
 
-        <!-- Load Static Files -->
-        <link rel="shortcut icon" href="{%  static 'favicon.ico' %}">
+  <!-- Load Static Files -->
+  <link rel="shortcut icon" href="{% static 'favicon.ico' %}"/>
 
-        <!-- Bootstrap CSS CDN -->
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.1/dist/css/bootstrap.min.css" integrity="sha384-zCbKRCUGaJDkqS1kPbPd7TveP5iyJE0EjAuZQTgFLD2ylzuqKfdKlfG/eSrtxUkn" crossorigin="anonymous">
+  <!-- Bootstrap CSS -->
+  <link rel="stylesheet" href="{% static 'vendor/bootstrap/5.3.8/css/bootstrap.min.css' %}"/>
+  <link rel="stylesheet" href="{% static 'css/bootstrap5_compat.css' %}"/>
 
-        <!-- Font Awesome JS -->
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" integrity="sha512-iBBXm8fW90+nuLcSKlbmrPcLa0OT92xO1BIsZ+ywDWZCvqsWgccV3gFoRBv0z+8dLJgyAHIhR35VZc2oM/gI1w==" crossorigin="anonymous" />
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="{% static 'css/fontawesome/all.css' %}"/>
 
-        <!-- jQuery CDN -->
-        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
-        <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.1/dist/js/bootstrap.min.js" integrity="sha384-VHvPCCyXqtD5DqJeNxl2dtTyhF78xXNXdkwX1CZeRusQfRKp+tA7hAShOK/B/fQ2" crossorigin="anonymous"></script>
+  <!-- jQuery JS -->
+  <script src="{% static 'js/jquery-3.6.1.min.js' %}"></script>
+  <script src="{% static 'js/jquery-ui.js' %}"></script>
 
-        <!-- jQuery Tablesorter Plugin -->
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery.tablesorter/2.31.3/js/jquery.tablesorter.js" crossorigin="anonymous"></script>
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery.tablesorter/2.31.3/js/jquery.tablesorter.widgets.js" crossorigin="anonymous"></script>
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery.tablesorter/2.31.3/js/parsers/parser-date-range.min.js" crossorigin="anonymous"></script>
+  <!-- Bootstrap JS bundle (includes Popper) -->
+  <script src="{% static 'vendor/bootstrap/5.3.8/js/bootstrap.bundle.min.js' %}"></script>
 
-        <!-- SortableJS for Drag n Drop -->
-        <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+  <!-- Sugar Parser -->
+  <script src="{% static 'js/sugar.min.js' %}"></script>
 
-        <!-- Toastr -->
-        <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/css/toastr.min.css">
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/js/toastr.min.js"></script>
+  <!-- jQuery Tablesorter Plugin -->
+  <script type="text/javascript" src="{% static 'js/jquery.tablesorter.js' %}"></script>
+  <script type="text/javascript" src="{% static 'js/jquery.tablesorter.widgets.js' %}"></script>
+  <script type="text/javascript" src="{% static 'js/parser-date-range.min.js' %}"></script>
+  <script type="text/javascript" src="{% static 'js/parser-date.js' %}"></script>
 
-        <!-- TinyMCE -->
-        <script src="{% static 'js/tinymce/tinymce.min.js' %}"></script>
+  <!-- SortableJS for Drag n Drop -->
+  <script src="{% static 'js/Sortable.min.js' %}"></script>
 
-        <!-- Ghostwriter JS & CSS -->
-        <script src="{% static 'js/project.js' %}"></script>
-        <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+  <!-- Toastr -->
+  <link rel="stylesheet" type="text/css" href="{% static 'css/toastr.min.css' %}">
+  <script type="text/javascript" src="{% static 'js/toastr.min.js' %}"></script>
 
-        <!-- TinyMCE -->
-        <script type="application/javascript" src= "{% static 'js/tinymce/config.js' %}"></script>
+  <!-- Rich-text editor shortcuts -->
+  {% include "snippets/editor_shortcuts_config.html" %}
 
-        <!-- FullCalendar -->
-        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@5.10.2/main.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@5.10.2/locales-all.min.js"></script>
-        <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/fullcalendar@5.10.2/main.min.css">
+  <!-- Ghostwriter JS & CSS -->
+  <script src="{% static 'js/project.js' %}"></script>
+  <script src="{% static 'js/active-report.js' %}?v={{ VERSION }}"></script>
+  <script src="{% static 'js/working-context.js' %}?v={{ VERSION }}"></script>
+  <link rel="stylesheet" href="{% static 'css/styles.css' %}?v={{ VERSION }}-scroll1"/>
+  <link rel="stylesheet" href="{% static 'css/app_shell.css' %}?v={{ VERSION }}"/>
+  <link rel="stylesheet" href="{% static 'css/design_system.css' %}?v={{ VERSION }}-ui40"/>
 
-        <!-- ClipboardJS -->
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.6/clipboard.min.js"></script>
+  <!-- Standalone Tiptap editor (packaged for offline deployments) -->
+  <script type="module" src="{% static 'assets/standalone_tiptap_loader.js' %}?v={{ VERSION }}"></script>
 
-        <!-- Textarea Autoresize -->
-        <script src="{% static 'js/jquery.textarea_autosize.js' %}"></script>
+  <!-- FullCalendar -->
+  <script src="{% static 'js/fullcalendar-main.min.js' %}"></script>
+  <script src="{% static 'js/fullcalendar-locales-all.min.js' %}"></script>
+  <link rel="stylesheet" type="text/css" href="{% static 'css/fullcalendar-main.min.css' %}">
 
-    </head>
+  <!-- ClipboardJS -->
+  <script src="{% static 'js/clipboard.min.js' %}"></script>
 
-    <body>
-        <div class="wrapper">
-            <!-- Sidebar Holder -->
-            {% if user.is_authenticated %}
-                <nav id="sidebar" class="{% if request.session.sidebar.sticky %}active{% endif %}">
-                    <!-- Sidebar Top Section -->
-                    <div class="sidebar-header col d-flex align-items-center justify-content-center">
-                        <a href="{% url 'home:dashboard' %}">
-                            <img src="{% static 'images/all_white_header.png' %}" alt="Ghostwriter">
-                        </a>
-                        <div class="sidebar-header-tab">
-                            <div class="square">
-                                <i class="sidebar-toggle-btn fas fa-angle-double-right {% if request.session.sidebar.sticky %}fa-flip-horizontal{% endif %}"></i>
-                            </div>
-                        </div>
-                    </div>
+  <!-- Textarea Autoresize -->
+  <script src="{% static 'js/jquery.textarea_autosize.js' %}"></script>
 
-                    <div class="sidebar-body">
-                        <!-- Project Shortcut Section -->
-                        <ul class="list-unstyled components">
-                            <p class="sideheader icon icon home-icon">Project Shortcuts</p>
+  <!-- JSONView -->
+  <script src="{% static 'js/jsonview.js' %}"></script>
+  <link rel="stylesheet" type="text/css" href="{% static 'css/jsonview.css' %}">
 
-                            <a
-                                {% if request.session.active_report.id and request.session.active_report.title %}
-                                    class="btn btn-primary mb-3 col-10 active-report-shortcut icon ext-link-icon"
-                                    href="{% url 'reporting:report_detail' request.session.active_report.id %}"
-                                    >Jump to Report
-                                {% else %}
-                                    class="btn btn-primary col-10 active-report-shortcut icon ext-link-icon btn-disabled"
-                                    href="{% url 'reporting:report_detail' 00 %}"
-                                    >Select Report Below
-                                {% endif %}
-                            </a>
+  <script>
+  (function() {
+    try {
+      var theme = localStorage.getItem('ghostwriter-theme') || 'light';
+      if (theme === 'auto') {
+        theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      }
+      document.documentElement.setAttribute('data-theme', theme);
+      document.documentElement.setAttribute('data-bs-theme', theme);
+    } catch(e) {}
+  })();
+  </script>
+</head>
 
-                            <!-- Menu Section -->
-                            <li>
-                                <a href="#activeReportsSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle" data-target="#activeReportsSubmenu">
-                                    My Active Reports
-                                    <div class="expand_caret caret"></div>
-                                </a>
-                                <ul class="collapse list-unstyled text-left" id="activeReportsSubmenu">
-                                    {% get_reports request as reports %}
-                                    {% if reports %}
-                                        {% for report in reports %}
-                                            <li>
-                                                <a title="Set this report as your active report"
-                                                class="js-activate-report icon toggle-off-icon
-                                                {% if request.session.active_report.id and request.session.active_report.title and request.session.active_report.id == report.id %}
-                                                    selected-report
-                                                {% endif %}
-                                                " activate-report-csrftoken="{{ csrf_token }}" activate-report-url="{% url 'reporting:ajax_activate_report' report.id %}" activate-report-id="{{ report.id }}">
-                                                {{ report.title }}</a>
-                                            </li>
-                                        {% endfor %}
-                                    {% else %}
-                                        <li><a href="{% url 'reporting:reports' %}">You have no active reports; click to visit the library.</a></li>
-                                    {% endif %}
-                                </ul>
-                            </li>
-
-                            <li>
-                                <a href="#activeProjectsSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle" data-target="#activeProjectsSubmenu">
-                                    My Active Projects
-                                    <div class="expand_caret caret"></div>
-                                </a>
-                                <ul class="collapse list-unstyled text-left" id="activeProjectsSubmenu">
-                                    {% if request.user.projectassignment_set.all %}
-                                        {% for assignment in request.user.projectassignment_set.all %}
-                                            {% if not assignment.project.complete %}
-                                                <li><a href="{% url 'rolodex:project_detail' assignment.project.id %}">{{ assignment.project }}</a></li>
-                                            {% endif %}
-                                        {% endfor %}
-                                    {% else %}
-                                        <li><a href="{% url 'rolodex:projects' %}">You have no assignments; click to visit the library.</a></li>
-                                    {% endif %}
-                                </ul>
-                            </li>
-                        </ul>
-
-                        <!-- Rolodex Section -->
-                        <ul class="list-unstyled components">
-                            <p class="sideheader icon icon tasks-icon">Pre-engagement</p>
-
-                            <!-- Menu Section -->
-                            <li>
-                                <a href="#clientSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle" data-target="#clientSubmenu">
-                                    Clients
-                                    <div class="expand_caret caret"></div>
-                                </a>
-                                <ul class="collapse list-unstyled text-left" id="clientSubmenu">
-                                    {% comment %} Search for Clients {% endcomment %}
-                                    <form class="px-6 py-2" action="{% url 'rolodex:clients' %}" method="GET">
-                                        <input type="search" autocomplete="off" class="form-control" id="client-search" name="client_search" placeholder="Search Clients..." autofocus="autofocus">
-                                    </form>
-                                    {% comment %} Clients Submenu Items {% endcomment %}
-                                    <li><a class="icon list-icon" href="{% url 'rolodex:clients' %}">Client Library</a></li>
-                                    <li><a class="icon plus-icon" href="{% url 'rolodex:client_create' %}">Add New Client</a></li>
-                                </ul>
-                            </li>
-                            <li>
-                                <a href="#findingsSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle">Findings</a>
-                                <ul class="collapse list-unstyled text-left" id="findingsSubmenu">
-                                {% comment %} Search for Findings {% endcomment %}
-                                    <form class="px-6 py-2" action="{% url 'reporting:findings' %}" method="GET">
-                                        <input type="search" autocomplete="off" class="form-control" id="finding-search" name="finding_search" placeholder="Search Findings..." autofocus="autofocus">
-                                    </form>
-                                    {% comment %} Findings Submenu Items {% endcomment %}
-                                    <li><a class="icon list-icon" href="{% url 'reporting:findings' %}">Finding Library</a></li>
-                                    <li><a class="icon plus-icon" href="{% url 'reporting:finding_create' %}">Add New Finding</a></li>
-                                </ul>
-                            </li>
-                        </ul>
-
-                        <!-- Operations Section -->
-                        <ul class="list-unstyled components">
-                            <p class="sideheader icon execution-icon">Execution</p>
-
-                            <!-- Menu Section -->
-                            {% if user.is_authenticated %}
-                                <li><a href="{% url 'shepherd:user_assets' %}">My Active Assets</a></li>
-                            {% endif %}
-                            <li>
-                                <a href="#projectSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle">Projects</a>
-                                <ul class="collapse list-unstyled text-left" id="projectSubmenu">
-                                    <li><a class="icon list-icon" href="{% url 'rolodex:projects' %}">Projects Library</a></li>
-                                    <li><a class="icon plus-icon" href="{% url 'rolodex:project_create_no_client' %}">Add New Project</a></li>
-                                </ul>
-                            </li>
-                            <li>
-                                <a href="#oplogSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle">Operation Logs</a>
-                                <ul class="collapse list-unstyled text-left" id="oplogSubmenu">
-                                    <li><a class="icon list-icon" href="{% url 'oplog:index' %}">Oplog Library</a></li>
-                                    <li><a class="icon plus-icon" href="{% url 'oplog:oplog_create_no_project' %}">Add New Oplog</a></li>
-                                    <li><a class="icon import-icon" href="{% url 'oplog:oplog_import' %}">Import Oplog Entries</a></li>
-                                </ul>
-                            </li>
-                        </ul>
-
-                        <!-- Reporting Section -->
-                        <ul class="list-unstyled components">
-                            <p class="sideheader icon file-icon">Reporting</p>
-
-                            <!-- Menu Section -->
-                            <li>
-                                <a href="#reportSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle">Reports</a>
-                                <ul class="collapse list-unstyled text-left" id="reportSubmenu">
-                                    <li><a class="icon list-icon" href="{% url 'reporting:reports' %}">Report Library</a></li>
-                                    <li><a class="icon plus-icon" href="{% url 'reporting:report_create_no_project' %}">Add New Report</a></li>
-                                </ul>
-                            </li>
-                            <li>
-                                <a href="#templateSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle">Templates</a>
-                                <ul class="collapse list-unstyled text-left" id="templateSubmenu">
-                                    <li><a class="icon list-icon" href="{% url 'reporting:templates' %}">Report Template Library</a></li>
-                                    <li><a class="icon plus-icon" href="{% url 'reporting:template_create' %}">Add New Report Template</a></li>
-                                </ul>
-                            </li>
-                            <li><a href="{% url 'reporting:archived_reports' %}">Archived Reports</a></li>
-                        </ul>
-
-                        <!-- Shepherd Section -->
-                        <ul class="list-unstyled components">
-                            <p class="sideheader icon maintain-icon">Maintain</p>
-
-                            <!-- Menu Section -->
-                            <li>
-                                <a href="#serverSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle">Servers</a>
-                                <ul class="collapse list-unstyled text-left" id="serverSubmenu">
-                                    {% comment %} Search for All Servers {% endcomment %}
-                                    <form class="px-6 py-2" action="{% url 'shepherd:infrastructure_search' %}" method="GET">
-                                        <input type="search" autocomplete="off" class="form-control" id="server-search" name="query" placeholder="Search Servers..." autofocus="autofocus">
-                                    </form>
-                                    {% comment %} Server Submenu Items {% endcomment %}
-                                    <li><a class="icon list-icon" href="{% url 'shepherd:servers' %}">Server Library</a></li>
-                                    <li><a class="icon plus-icon" href="{% url 'shepherd:server_create' %}">Add New Server</a></li>
-                                </ul>
-                            </li>
-                            <li>
-                                <a href="#shepSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle">Domains</a>
-                                <ul class="collapse list-unstyled text-left" id="shepSubmenu">
-                                    {% comment %} Search for Domains {% endcomment %}
-                                    <form class="px-6 py-2" action="{% url 'shepherd:domains' %}" method="GET">
-                                        <input type="search" autocomplete="off" class="form-control" id="domain-search" name="domain_search" placeholder="Search Domains..." autofocus="autofocus">
-                                    </form>
-                                    {% comment %} Domains Submenu Items {% endcomment %}
-                                    <li><a class="icon list-icon" href="{% url 'shepherd:domains' %}">Domain Library</a></li>
-                                    <li><a class="icon plus-icon" href="{% url 'shepherd:domain_create' %}">Add New Domain</a></li>
-                                </ul>
-                            </li>
-                            <li><a href="{% url 'shepherd:update' %}">Update Controls</a></li>
-                        </ul>
-
-                        <!-- Admin Section -->
-                        <ul class="list-unstyled components">
-                            <!-- Admin Panel Shortcuts -->
-                            <p class="sideheader icon admin-icon">Administration</p>
-                            {% if request.user.is_staff %}
-                                <li><a href="{% url 'home:management' %}">Review Configuration</a></li>
-                                <li>
-                                    <a href="#adminSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle">Admin Panel</a>
-                                    <ul class="collapse list-unstyled text-left" id="adminSubmenu">
-                                        <li><a class="icon gears-icon" href="{% url 'admin:index' %}">Admin Panel</a></li>
-                                        <li><a class="icon slider-icon" href="{% url 'admin:index' %}commandcenter">Configuration Mgmt</a></li>
-                                        {% if perms.users.view_user %}
-                                            <li><a class="icon users-icon" href="{% url 'admin:users_user_changelist' %}">User Mgmt</a></li>
-                                        {% endif %}
-                                        {% if perms.django_q.view_task %}
-                                            <li><a class="icon calendar-icon" href="{% url 'admin:app_list' 'django_q' %}">Scheduled Tasks</a></li>
-                                        {% endif %}
-                                    </ul>
-                                </li>
-                                <!-- Bulk Import & Export Shortcuts -->
-                                <li>
-                                    <a href="#bulkSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle">Import & Export</a>
-                                    <ul class="collapse list-unstyled text-left" id="bulkSubmenu">
-                                        <li><a class="icon import-icon" href="{% url 'admin:reporting_finding_import' %}">Upload Bulk Findings</a></li>
-                                        <li><a class="icon export-icon" href="{% url 'reporting:export_findings_to_csv' %}">Export Findings to CSV</a></li>
-                                        <hr>
-                                        <li><a class="icon import-icon" href="{% url 'admin:shepherd_domain_import' %}">Upload Bulk Domains</a></li>
-                                        <li><a class="icon export-icon" href="{% url 'shepherd:export_domains_to_csv' %}">Export Domains to CSV</a></li>
-                                        <hr>
-                                        <li><a class="icon import-icon" href="{% url 'admin:shepherd_staticserver_import' %}">Upload Bulk Servers</a></li>
-                                        <li><a class="icon export-icon" href="{% url 'shepherd:export_servers_to_csv' %}">Export Servers to CSV</a></li>
-                                    </ul>
-                                </li>
-                            {% endif %}
-                            <!-- Documentation Section -->
-                            <li>
-                                <a href="#docsSubmenu" data-toggle="collapse" aria-expanded="false" class="dropdown-toggle sidebar-dropdown-toggle">Documentation</a>
-                                <ul class="collapse list-unstyled text-left" id="docsSubmenu">
-                                    <li><a class="icon docs-icon" href="https://ghostwriter.wiki">Ghostwriter Wiki</a></li>
-                                    <li><a class="icon github-icon" href="https://github.com/GhostManager/Ghostwriter">Ghostwriter on GitHub</a></li>
-                                </ul>
-                            </li>
-                        </ul>
-
-                        <!-- Sidebar Buttons -->
-                        <div class="align-middle text-center">
-                            {% if user.is_authenticated %}
-                                <a href="{% url 'account_logout' %}" class="btn btn-primary col-10 icon logout-icon">Logout</a>
-                            {% else %}
-                                <a href="{% url 'account_login' %}" class="btn btn-primary col-10 icon login-icon">Login</a>
-                            {% endif %}
-
-                            <a href="https://www.specterops.io"><img class="col-8" src="{% static 'images/domain.png' %}" alt="SpecterOps"></a>
-                        </div>
-                    </div>
-
-                    <div class="sidebar-footer col d-flex align-items-center justify-content-center mb-2">
-                        <span>v{{ VERSION }}, released {{ RELEASE_DATE }}</span>
-                    </div>
-                </nav>
-            {% endif %}
-
-            <!-- Page Content Holder -->
-            <div id="content">
-                {% if user.is_authenticated %}
-                    <div class="top-bar container-fluid align-middle">
-                        <!-- Breadcrumb Links -->
-                        {% block breadcrumbs %}{% endblock %}
-
-                        <!-- User Profile & Avatar -->
-                        <a href="{% url 'users:user_detail' request.user.username %}"><img class="navbar-avatar" src="{{ user.userprofile.avatar_url }}" alt="Avatar"></a>
-                    </div>
-                {% endif %}
-
-                <!-- Page Content Goes Here -->
-                <div>
-                    {% block content %}{% endblock %}
-                    {% block pagination %}
-                        {% if is_paginated %}
-                            <div class="pagination">
-                                <span class="page-links">
-                                    <span class="page-current">
-                                        <p>
-                                            {% if page_obj.has_previous %}
-                                                <a href="{{ request.path }}?page={{ page_obj.previous_page_number }}"></a>
-                                            {% endif %}
-                                            Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
-                                            {% if page_obj.has_next %}
-                                                <a href="{{ request.path }}?page={{ page_obj.next_page_number }}"> ></a>
-                                            {% endif %}
-                                        </p>
-                                    </span>
-                                </span>
-                            </div>
-                        {% endif %}
-                    {% endblock %}
-                </div>
-            </div>
+<body class="has-scroll-to-top">
+<div class="wrapper">
+  <!-- Sidebar Holder -->
+  {% if request.user.is_authenticated %}
+    <nav id="sidebar" class="{% if request.session.sidebar.sticky %}active{% endif %}">
+      <!-- Sidebar Top Section -->
+      <div class="sidebar-header">
+        <a class="sidebar-brand-mark" href="{% url 'home:dashboard' %}" aria-label="Ghostwriter dashboard">
+          <img class="sidebar-logo-mark" src="{% static 'images/laughing_logo.png' %}" alt="">
+        </a>
+        <div class="sidebar-product-meta">
+          <span class="sidebar-product-name">Ghostwriter</span>
+          <span class="sidebar-build-meta">v{{ VERSION }}</span>
+          <span class="sidebar-build-meta">Build {{ RELEASE_DATE }}</span>
         </div>
+        <button
+          type="button"
+          class="sidebar-toggle-control sidebar-desktop-toggle"
+          aria-controls="sidebar"
+          aria-expanded="{% if request.session.sidebar.sticky %}true{% else %}false{% endif %}"
+          aria-label="{% if request.session.sidebar.sticky %}Collapse{% else %}Expand{% endif %} navigation"
+          title="{% if request.session.sidebar.sticky %}Collapse{% else %}Expand{% endif %} navigation"
+          data-bs-toggle="tooltip"
+          data-bs-placement="right"
+        >
+          <i
+            aria-hidden="true"
+            class="sidebar-toggle-btn fas fa-chevron-right {% if request.session.sidebar.sticky %}fa-flip-horizontal{% endif %}"></i>
+        </button>
+      </div>
 
-        <a style="display: none;" id="scroll-button"></a>
+      {% include "snippets/sidebar_navigation.html" %}
 
-        <!-- Back to Top Button -->
-        <script>
-            //Get the button
-            var scrollButton = $("#scroll-button");
+      <div class="sidebar-actions">
+        <div class="sidebar-account-row">
+          <a class="sidebar-account-profile" href="{% url 'users:user_detail' request.user.username %}">
+            <img src="{% url 'users:avatar_download' slug=request.user.username %}" alt="">
+            <span>{{ request.user.username }}</span>
+          </a>
+          <a class="sidebar-account-logout"
+             href="{% url 'account_logout' %}"
+             aria-label="Logout"
+             title="Logout">
+            <i class="fas fa-sign-out-alt" aria-hidden="true"></i>
+          </a>
+        </div>
+        <div class="theme-toggle-container">
+          <div class="sidebar-theme-control">
+            <div class="sidebar-action-heading">
+              <span><i class="fas fa-adjust" aria-hidden="true"></i> Theme</span>
+              <span id="sidebar-theme-status">Light</span>
+            </div>
+            <div class="theme-toggle-wrapper">
+              <label class="theme-switch" aria-label="Toggle dark mode">
+                <input type="checkbox" id="theme-toggle-switch">
+                <span class="theme-slider">
+                  <span class="sun"></span>
+                  <span class="cloud"></span>
+                  <span class="moon"></span>
+                  <span class="star"></span>
+                  <span class="star"></span>
+                  <span class="star"></span>
+                  <span class="star"></span>
+                  <span class="star"></span>
+                </span>
+              </label>
+            </div>
+          </div>
+          <div class="auto-checkbox-wrapper">
+            <input type="checkbox" id="theme-auto-checkbox">
+            <label for="theme-auto-checkbox">Follow system theme</label>
+          </div>
+        </div>
+      </div>
+    </nav>
+    {% include "snippets/sidebar_preferences_modal.html" %}
+    {% include "snippets/working_context_modal.html" %}
+    <button
+      type="button"
+      class="sidebar-toggle-control sidebar-mobile-toggle"
+      aria-controls="sidebar"
+      aria-expanded="{% if request.session.sidebar.sticky %}true{% else %}false{% endif %}"
+      aria-label="{% if request.session.sidebar.sticky %}Collapse{% else %}Expand{% endif %} navigation"
+      title="{% if request.session.sidebar.sticky %}Collapse{% else %}Expand{% endif %} navigation"
+    >
+      <i
+        aria-hidden="true"
+        class="sidebar-toggle-btn fas fa-chevron-right {% if request.session.sidebar.sticky %}fa-flip-horizontal{% endif %}"></i>
+    </button>
+    <button type="button" class="sidebar-backdrop" aria-label="Close navigation" tabindex="-1"></button>
+  {% endif %}
 
-            // When the user scrolls down 20px from the top of the document, show the button
-            $(window).on("scroll", function() {
-                if ($(window).scrollTop() > 300) {
-                    scrollButton.show(500);
-                } else {
-                    scrollButton.hide(500);
-                }
-            });
+  <!-- Page Content Holder -->
+  <div id="content">
+    {% if request.user.is_authenticated %}
+      <aside class="engagement-context{% if active_engagement %} engagement-context-active{% endif %}"
+             data-active-report-id="{% if active_engagement %}{{ active_engagement.report.id }}{% endif %}"
+             data-active-report-title="{% if active_engagement %}{{ active_engagement.report.title }}{% endif %}"
+             data-active-report-url="{% if active_engagement %}{{ active_engagement.report.get_absolute_url }}{% endif %}"
+             data-active-client="{% if active_engagement %}{{ active_engagement.client.name }}{% endif %}"
+             data-active-client-url="{% if active_engagement %}{{ active_engagement.client.get_absolute_url }}{% endif %}"
+             data-active-project="{% if active_engagement %}{{ active_engagement.project }}{% endif %}"
+             data-active-project-url="{% if active_engagement %}{{ active_engagement.project.get_absolute_url }}{% endif %}"
+             data-active-report-complete="{% if active_engagement and active_engagement.report.complete %}true{% else %}false{% endif %}"
+             data-active-report-delivered="{% if active_engagement and active_engagement.report.delivered %}true{% else %}false{% endif %}"
+             aria-label="Working engagement">
+        <div class="engagement-context-label">
+          <span class="engagement-context-label-copy">
+            <span class="engagement-context-pulse" aria-hidden="true"></span>
+            <span>Working on</span>
+          </span>
+          <button type="button"
+                  class="engagement-context-switch"
+                  data-bs-toggle="modal"
+                  data-bs-target="#workingContextModal"
+                  data-working-context-launcher="all">
+            <i class="fas fa-exchange-alt" aria-hidden="true"></i>
+            <span data-working-report-switch-label>{% if active_engagement %}Switch report{% else %}Choose report{% endif %}</span>
+          </button>
+        </div>
+        <div class="engagement-context-empty{% if active_engagement %} d-none{% endif %}">
+          <span>No working report selected. Choose where library quick-adds should go.</span>
+        </div>
+        <div class="engagement-context-details{% if not active_engagement %} d-none{% endif %}">
+          <div class="engagement-context-identity">
+            <a class="engagement-context-report"
+               href="{% if active_engagement %}{{ active_engagement.report.get_absolute_url }}{% endif %}"
+               title="{% if active_engagement %}{{ active_engagement.report.title }}{% endif %}">
+              <i class="fas fa-file-alt engagement-context-report-icon" aria-hidden="true"></i>
+              <span class="engagement-context-report-text">
+                {% if active_engagement %}{{ active_engagement.report.title }}{% endif %}
+              </span>
+              <i class="fas fa-arrow-right engagement-context-report-open" aria-hidden="true"></i>
+            </a>
+          </div>
+          <div class="engagement-context-scope" aria-label="Client and project">
+            <div class="engagement-context-scope-item">
+              <i class="fas fa-building engagement-context-scope-icon" aria-hidden="true"></i>
+              <span class="engagement-context-scope-copy">
+                <span class="engagement-context-scope-label">Client</span>
+                <a class="engagement-context-client"
+                   href="{% if active_engagement %}{{ active_engagement.client.get_absolute_url }}{% endif %}"
+                   title="{% if active_engagement %}{{ active_engagement.client.name }}{% endif %}">
+                  <span class="engagement-context-client-text">
+                    {% if active_engagement %}{{ active_engagement.client.name }}{% endif %}
+                  </span>
+                </a>
+              </span>
+            </div>
+            <div class="engagement-context-scope-item">
+              <i class="fas fa-project-diagram engagement-context-scope-icon" aria-hidden="true"></i>
+              <span class="engagement-context-scope-copy">
+                <span class="engagement-context-scope-label">Project</span>
+                <a class="engagement-context-project"
+                   href="{% if active_engagement %}{{ active_engagement.project.get_absolute_url }}{% endif %}"
+                   title="{% if active_engagement %}{{ active_engagement.project }}{% endif %}">
+                  <span class="engagement-context-project-text">
+                    {% if active_engagement %}{{ active_engagement.project }}{% endif %}
+                  </span>
+                </a>
+              </span>
+            </div>
+          </div>
+          <div class="engagement-context-state" aria-label="Engagement actions and working report state">
+            <div class="dropdown engagement-context-activity">
+              <button type="button"
+                      class="engagement-context-activity-toggle"
+                      data-bs-toggle="dropdown"
+                      data-bs-auto-close="outside"
+                      aria-expanded="false"
+                      aria-label="Open activity logs for this engagement">
+                <i class="fas fa-stream" aria-hidden="true"></i>
+                <span>Activity logs</span>
+                <span class="engagement-context-activity-count" data-engagement-log-count>
+                  {% if active_engagement %}{{ active_engagement.activity_logs|length }}{% else %}0{% endif %}
+                </span>
+                <i class="fas fa-chevron-down engagement-context-activity-chevron" aria-hidden="true"></i>
+              </button>
+              <div class="dropdown-menu dropdown-menu-end engagement-context-activity-menu">
+                <div class="engagement-context-activity-heading">
+                  <span>Activity logs</span>
+                  <small data-engagement-log-project>
+                    {% if active_engagement %}{{ active_engagement.project }}{% endif %}
+                  </small>
+                </div>
+                <div class="engagement-context-activity-list" data-engagement-log-list>
+                  {% if active_engagement and active_engagement.activity_logs %}
+                    {% for activity_log in active_engagement.activity_logs %}
+                      <a class="dropdown-item engagement-context-activity-item"
+                         href="{{ activity_log.get_absolute_url }}"
+                         data-engagement-log-name="{{ activity_log.name }}">
+                        <i class="fas fa-stream" aria-hidden="true"></i>
+                        <span>{{ activity_log.name }}</span>
+                        <i class="fas fa-arrow-right" aria-hidden="true"></i>
+                      </a>
+                    {% endfor %}
+                  {% endif %}
+                  <div class="engagement-context-activity-empty{% if active_engagement and active_engagement.activity_logs %} d-none{% endif %}"
+                       data-engagement-log-empty>
+                    <i class="far fa-clipboard" aria-hidden="true"></i>
+                    <span>No activity logs for this project.</span>
+                  </div>
+                </div>
+                <div class="engagement-context-activity-footer">
+                  <a href="{% url 'oplog:index' %}">
+                    View all activity logs
+                    <i class="fas fa-arrow-right" aria-hidden="true"></i>
+                  </a>
+                </div>
+              </div>
+            </div>
+            <span class="engagement-context-state-item">
+              <i class="fas fa-pencil-alt" aria-hidden="true"></i>
+              <span class="engagement-context-report-status">
+                {% if active_engagement.report.complete %}Complete{% else %}Draft{% endif %}
+              </span>
+            </span>
+            <span class="engagement-context-state-item">
+              <i class="fas fa-paper-plane" aria-hidden="true"></i>
+              <span class="engagement-context-delivery-status">
+                {% if active_engagement.report.delivered %}Delivered{% else %}Not delivered{% endif %}
+              </span>
+            </span>
+          </div>
+          <details class="engagement-context-mobile-context">
+            <summary aria-label="Show client and project context" title="Show client and project context">
+              <i class="fas fa-sitemap" aria-hidden="true"></i>
+              <span>Context</span>
+            </summary>
+            <div class="engagement-context-mobile-menu">
+              <span class="engagement-context-mobile-label">Client</span>
+              <a class="engagement-context-client"
+                 href="{% if active_engagement %}{{ active_engagement.client.get_absolute_url }}{% endif %}"
+                 title="{% if active_engagement %}{{ active_engagement.client.name }}{% endif %}">
+                <span class="engagement-context-client-text">
+                  {% if active_engagement %}{{ active_engagement.client.name }}{% endif %}
+                </span>
+              </a>
+              <span class="engagement-context-mobile-label">Project</span>
+              <a class="engagement-context-project"
+                 href="{% if active_engagement %}{{ active_engagement.project.get_absolute_url }}{% endif %}"
+                 title="{% if active_engagement %}{{ active_engagement.project }}{% endif %}">
+                <span class="engagement-context-project-text">
+                  {% if active_engagement %}{{ active_engagement.project }}{% endif %}
+                </span>
+              </a>
+            </div>
+          </details>
+        </div>
+      </aside>
+    {% endif %}
 
-            // When the user clicks on the button, scroll to the top of the document
-            scrollButton.on("click", function() {
-                $('html, body').animate({scrollTop:0}, "300");
-            });
-        </script>
+    {%  comment %} MOTD Banner {% endcomment %}
+    {% if banner_config.enable_banner and not banner_config.expiry_date|is_past %}
+      {% if request.user.is_authenticated or banner_config.public_banner %}
+        <div id="globalBanner" class="container-fluid mb-3" expiryDate="{{ expiry_date }}">
+          <div class="alert alert-success text-center mb-0" role="alert">
+            <button type="button" class="btn-close global-banner-close" data-bs-dismiss="alert" aria-label="Close"></button>
 
-        <!-- Script for Copying Text to Clipboard-->
-        <script>
-            function copyToClipboard(element) {
-                var $temp = $('<input>');
-                $("body").append($temp);
-                $temp.val($(element).text().trim()).select();
-                document.execCommand('copy');
-                $temp.remove();
+            {% if banner_config.banner_title %}<h4 class="alert-heading mt-0">{{ banner_config.banner_title|bleach }}</h4>{% endif %}
+            {{ banner_config.banner_message|bleach }}
+            {% with banner_link=banner_config.safe_banner_link %}
+              {% if banner_link %}
+                <p class="mt-2 mb-0"><a href="{{ banner_link }}" class="alert-link">Learn more</a></p>
+              {% endif %}
+            {% endwith %}
+          </div>
+        </div>
+      {% endif %}
+    {% endif %}
+
+    {%  comment %} Page Content Goes Here {% endcomment %}
+    <div class="page-content">
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+</div>
+
+{% include "snippets/scroll_to_top.html" %}
+<script src="{% static 'js/page-sticky-offset.js' %}?v={{ VERSION }}"></script>
+
+{% comment %} Scripts included on ALL pages {% endcomment %}
+<script>
+  {% comment %} Open a modal by ID {% endcomment %}
+  function openModal(modalId) {
+    // Add # prefix if not present for the selector
+    const selector = modalId.startsWith('#') ? modalId : '#' + modalId;
+    const modal = document.querySelector(selector);
+    if (modal) {
+      bootstrap.Modal.getOrCreateInstance(modal).show();
+    }
+  }
+
+  function moveFocusOutOfModal(modal) {
+    const activeElement = document.activeElement;
+
+    if (!modal || !activeElement || !modal.contains(activeElement)) {
+      return;
+    }
+
+    const bodyHadTabindex = document.body.hasAttribute('tabindex');
+    const previousBodyTabindex = document.body.getAttribute('tabindex');
+
+    activeElement.blur();
+    document.body.setAttribute('tabindex', '-1');
+    document.body.focus({preventScroll: true});
+
+    if (bodyHadTabindex) {
+      document.body.setAttribute('tabindex', previousBodyTabindex);
+    } else {
+      document.body.removeAttribute('tabindex');
+    }
+  }
+
+  document.addEventListener('click', function (event) {
+    const target = event.target;
+
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const dismissButton = target.closest('[data-bs-dismiss="modal"]');
+    const modal = dismissButton ? dismissButton.closest('.modal') : null;
+
+    if (modal) {
+      moveFocusOutOfModal(modal);
+    }
+  }, true);
+
+  $(document).on('hide.bs.modal', '.modal', function () {
+    moveFocusOutOfModal(this);
+  });
+
+  {% comment %} Handle AJAX errors {% endcomment %}
+  (function ($) {
+    $(document).on('ajaxError', function (event, xhr) {
+      if (xhr.status === 401 || xhr.status === 403) {
+        if (xhr.hasOwnProperty('responseJSON')) {
+          let errorData = xhr.responseJSON;
+          if (errorData['message']) {
+            displayToastTop({type: errorData['result'], string: errorData['message'], title: 'Error'});
+          }
+        }
+      }
+    });
+  })(jQuery);
+
+  {% comment %} Persist the working report in browser storage across login sessions {% endcomment %}
+  GhostwriterActiveReport.init({
+    reportUrlTemplate: '{% url 'reporting:report_detail' 0 %}',
+    activationUrlTemplate: '{% url 'reporting:ajax_activate_report' 0 %}',
+  });
+
+  {% comment %} Open and close the sidebar {% endcomment %}
+
+  const sidebarElement = document.getElementById('sidebar');
+  const narrowSidebarMedia = window.matchMedia('(max-width: 767.98px)');
+  let desktopSidebarOpen = sidebarElement ? sidebarElement.classList.contains('active') : false;
+  let sidebarTransitionTimer = null;
+
+  function syncSidebarState() {
+    const isOpen = $('#sidebar').hasClass('active');
+    const toggleButtons = document.querySelectorAll('.sidebar-toggle-control');
+
+    toggleButtons.forEach(function(toggleButton) {
+      const label = (isOpen ? 'Collapse' : 'Expand') + ' navigation';
+      toggleButton.setAttribute('aria-expanded', String(isOpen));
+      toggleButton.setAttribute('aria-label', label);
+      toggleButton.setAttribute('title', label);
+
+      const tooltip = bootstrap.Tooltip.getInstance(toggleButton);
+      if (tooltip) {
+        tooltip.hide();
+        tooltip.setContent({'.tooltip-inner': label});
+      }
+    });
+
+    document.body.classList.toggle('sidebar-open', isOpen);
+  }
+
+  function sidebarOpen() {
+    const sidebar = sidebarElement;
+    if (!sidebar) {
+      return;
+    }
+
+    const isNarrowSidebar = narrowSidebarMedia.matches;
+    const isOpening = !sidebar.classList.contains('active');
+
+    window.clearTimeout(sidebarTransitionTimer);
+    sidebar.classList.remove('sidebar-transition-opening', 'sidebar-transition-closing');
+    void sidebar.offsetWidth;
+    sidebar.classList.add(isOpening ? 'sidebar-transition-opening' : 'sidebar-transition-closing');
+
+    $('#sidebar').toggleClass('active');
+    $('.sidebar-toggle-btn').toggleClass('fa-flip-horizontal');
+    syncSidebarState();
+
+    if (!isNarrowSidebar) {
+      desktopSidebarOpen = sidebar.classList.contains('active');
+    }
+
+    sidebarTransitionTimer = window.setTimeout(function () {
+      sidebar.classList.remove('sidebar-transition-opening', 'sidebar-transition-closing');
+    }, 360);
+
+    if (!isNarrowSidebar) {
+      {% comment %} Persist only the desktop sidebar preference. Narrow overlays are ephemeral. {% endcomment %}
+      $.ajax({
+        url: '/home/ajax/session/update',
+        type: 'POST',
+        dataType: 'json',
+        data: {
+          'session_data': 'sidebar',
+        },
+      });
+    }
+  }
+
+  function syncSidebarViewport(event) {
+    if (!sidebarElement) {
+      return;
+    }
+
+    if (event.matches) {
+      desktopSidebarOpen = sidebarElement.classList.contains('active');
+      sidebarElement.classList.remove('active');
+    } else {
+      sidebarElement.classList.toggle('active', desktopSidebarOpen);
+    }
+
+    $('.sidebar-toggle-btn').toggleClass(
+      'fa-flip-horizontal',
+      sidebarElement.classList.contains('active'),
+    );
+    syncSidebarState();
+  }
+
+  narrowSidebarMedia.addEventListener('change', syncSidebarViewport);
+
+  {% comment %} Open the sidebar {% endcomment %}
+  $('.sidebar-toggle-control').click(function () {
+    sidebarOpen();
+  });
+
+  $('.sidebar-backdrop').click(function () {
+    if ($('#sidebar').hasClass('active')) {
+      sidebarOpen();
+    }
+  });
+
+  $(document).on('keydown', function (event) {
+    if (event.key === 'Escape' && window.matchMedia('(max-width: 767.98px)').matches && $('#sidebar').hasClass('active')) {
+      sidebarOpen();
+      const toggleButton = document.querySelector('.sidebar-mobile-toggle');
+      if (toggleButton) {
+        toggleButton.focus();
+      }
+    }
+  });
+
+  {% comment %} Mark and reveal the sidebar destination that best matches the current route. {% endcomment %}
+  (function markCurrentSidebarDestination() {
+    const normalizePath = function (path) {
+      return path === '/' ? path : path.replace(/\/$/, '');
+    };
+    const currentPath = normalizePath(window.location.pathname);
+    let bestPath = null;
+
+    const sidebarLocationLinks = [
+      '#sidebar .sidebar-rail a[href]:not(.sidebar-rail-work-link)',
+      '#sidebar .sidebar-body a[href]:not(.sidebar-pinned-work-link)',
+    ].join(', ');
+
+    $(sidebarLocationLinks).each(function () {
+      const rawHref = this.getAttribute('href');
+      if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) {
+        return;
+      }
+
+      const targetUrl = new URL(this.href, window.location.origin);
+      if (targetUrl.origin !== window.location.origin) {
+        return;
+      }
+
+      const targetPath = normalizePath(targetUrl.pathname);
+      const matches = currentPath === targetPath || (targetPath !== '/' && currentPath.startsWith(targetPath + '/'));
+      if (matches && (!bestPath || targetPath.length > bestPath.length)) {
+        bestPath = targetPath;
+      }
+    });
+
+    if (!bestPath) {
+      return;
+    }
+
+    let expandedMenuLink = null;
+    $(sidebarLocationLinks).each(function () {
+      const rawHref = this.getAttribute('href');
+      if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) {
+        return;
+      }
+
+      const targetUrl = new URL(this.href, window.location.origin);
+      if (targetUrl.origin === window.location.origin && normalizePath(targetUrl.pathname) === bestPath) {
+        this.classList.add('sidebar-current');
+        this.setAttribute('aria-current', 'page');
+        if (this.closest('.sidebar-body')) {
+          expandedMenuLink = this;
+        }
+      }
+    });
+
+    const parentCollapse = expandedMenuLink ? expandedMenuLink.closest('.collapse') : null;
+    if (parentCollapse) {
+      bootstrap.Collapse.getOrCreateInstance(parentCollapse, {toggle: false}).show();
+    }
+  })();
+
+  syncSidebarViewport(narrowSidebarMedia);
+
+  {% comment %} Activate Bootstrap hover tooltips {% endcomment %}
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-bs-toggle="tooltip"], [data-working-context-tooltip], .table-row-action[title]').forEach(function (tooltip) {
+      const options = {boundary: document.body};
+      if (tooltip.matches('.table-row-action[title]')) {
+        options.placement = 'top';
+        options.fallbackPlacements = ['bottom'];
+      }
+      bootstrap.Tooltip.getOrCreateInstance(tooltip, options);
+    });
+  });
+
+  {% comment %} Sidebar shortcut customization {% endcomment %}
+  (function() {
+    const form = document.querySelector('[data-sidebar-preferences-form]');
+    if (!form) {
+      return;
+    }
+
+    function initializeOrderedList(options) {
+      const list = form.querySelector(options.listSelector);
+      const orderInput = form.querySelector(options.orderSelector);
+      if (!list || !orderInput) {
+        return function() {};
+      }
+
+      function rows() {
+        return Array.from(list.querySelectorAll(options.rowSelector));
+      }
+
+      function updateOrderControls() {
+        const currentRows = rows();
+        currentRows.forEach(function(row, index) {
+          const upButton = row.querySelector('[' + options.moveAttribute + '="up"]');
+          const downButton = row.querySelector('[' + options.moveAttribute + '="down"]');
+          upButton.disabled = index === 0;
+          downButton.disabled = index === currentRows.length - 1;
+        });
+        orderInput.value = currentRows.map(function(row) {
+          return row.getAttribute(options.idAttribute);
+        }).join(',');
+      }
+
+      list.addEventListener('click', function(event) {
+        const button = event.target.closest('[' + options.moveAttribute + ']');
+        if (!button) {
+          return;
+        }
+
+        const row = button.closest(options.rowSelector);
+        const direction = button.getAttribute(options.moveAttribute);
+        if (direction === 'up' && row.previousElementSibling) {
+          list.insertBefore(row, row.previousElementSibling);
+        } else if (direction === 'down' && row.nextElementSibling) {
+          list.insertBefore(row.nextElementSibling, row);
+        }
+        updateOrderControls();
+        button.focus();
+      });
+
+      updateOrderControls();
+      return updateOrderControls;
+    }
+
+    const updateToolOrder = initializeOrderedList({
+      listSelector: '[data-sidebar-preferences-list]',
+      rowSelector: '[data-sidebar-item-id]',
+      idAttribute: 'data-sidebar-item-id',
+      moveAttribute: 'data-sidebar-move',
+      orderSelector: '[data-sidebar-order]',
+    });
+    const updatePanelOrder = initializeOrderedList({
+      listSelector: '[data-sidebar-panel-list]',
+      rowSelector: '[data-sidebar-panel-id]',
+      idAttribute: 'data-sidebar-panel-id',
+      moveAttribute: 'data-sidebar-panel-move',
+      orderSelector: '[data-sidebar-panel-order]',
+    });
+
+    form.addEventListener('submit', function() {
+      updateToolOrder();
+      updatePanelOrder();
+    });
+  })();
+
+  {% comment %} Theme Toggle Functionality {% endcomment %}
+  (function() {
+    const THEME_STORAGE_KEY = 'ghostwriter-theme';
+    const themeToggleSwitch = document.getElementById('theme-toggle-switch');
+    const themeAutoCheckbox = document.getElementById('theme-auto-checkbox');
+    const themeStatus = document.getElementById('sidebar-theme-status');
+    const themeButtons = document.querySelectorAll('[data-theme-value]');
+    const railThemeButton = document.querySelector('[data-sidebar-theme-trigger]');
+
+    // Function to get the system theme preference
+    function getSystemTheme() {
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+      }
+      return 'light';
+    }
+
+    // Function to apply the theme
+    function applyTheme(theme) {
+      let actualTheme = theme;
+      if (theme === 'auto') {
+        actualTheme = getSystemTheme();
+      }
+      document.documentElement.setAttribute('data-theme', actualTheme);
+      document.documentElement.setAttribute('data-bs-theme', actualTheme);
+
+      if (themeToggleSwitch) {
+        themeToggleSwitch.checked = actualTheme === 'dark';
+      }
+
+      if (themeAutoCheckbox) {
+        themeAutoCheckbox.checked = theme === 'auto';
+      }
+
+      if (themeStatus) {
+        themeStatus.textContent = theme === 'auto'
+          ? 'System (' + actualTheme.charAt(0).toUpperCase() + actualTheme.slice(1) + ')'
+          : actualTheme.charAt(0).toUpperCase() + actualTheme.slice(1);
+      }
+
+      themeButtons.forEach(function(button) {
+        const isCurrent = button.dataset.themeValue === theme;
+        if (isCurrent) {
+          button.setAttribute('aria-current', 'true');
+        } else {
+          button.removeAttribute('aria-current');
+        }
+      });
+
+      if (railThemeButton) {
+        const themeName = theme === 'auto' ? 'System' : theme.charAt(0).toUpperCase() + theme.slice(1);
+        railThemeButton.setAttribute('aria-label', 'Theme settings. Current: ' + themeName);
+        railThemeButton.setAttribute('title', 'Theme: ' + themeName);
+      }
+    }
+
+    // Function to get current theme preference
+    function getCurrentTheme() {
+      return localStorage.getItem(THEME_STORAGE_KEY) || 'light';
+    }
+
+    // Function to save and apply theme
+    function saveAndApplyTheme(theme) {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+      applyTheme(theme);
+    }
+
+    // Initialize theme on page load
+    applyTheme(getCurrentTheme());
+
+    if (themeToggleSwitch) {
+      themeToggleSwitch.addEventListener('change', function() {
+        if (themeAutoCheckbox) {
+          themeAutoCheckbox.checked = false;
+        }
+        saveAndApplyTheme(this.checked ? 'dark' : 'light');
+      });
+    }
+
+    if (themeAutoCheckbox) {
+      themeAutoCheckbox.addEventListener('change', function() {
+        if (this.checked) {
+          saveAndApplyTheme('auto');
+        } else {
+          saveAndApplyTheme(themeToggleSwitch && themeToggleSwitch.checked ? 'dark' : 'light');
+        }
+      });
+    }
+
+    themeButtons.forEach(function(button) {
+      button.addEventListener('click', function() {
+        saveAndApplyTheme(this.dataset.themeValue);
+      });
+    });
+
+    // Listen for system theme changes when in auto mode
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
+        const currentTheme = getCurrentTheme();
+        if (currentTheme === 'auto') {
+          applyTheme('auto');
+        }
+      });
+    }
+  })();
+
+  {% comment %} All of the Toastr JavaScript {% endcomment %}
+  $(document).ready(function () {
+    toastr.options = {
+      'closeButton': true,
+      'debug': false,
+      'newestOnTop': false,
+      'progressBar': true,
+      'positionClass': 'toast-top-right',
+      'preventDuplicates': false,
+      'showDuration': '1000',
+      'hideDuration': '1000',
+      'timeOut': '4000',
+      'extendedTimeOut': '4000',
+      'showEasing': 'swing',
+      'hideEasing': 'linear',
+      'showMethod': 'fadeIn',
+      'hideMethod': 'fadeOut',
+    }
+    // Need to set this outside of the dict per the README
+    // https://github.com/CodeSeven/toastr#escape-html-characters
+    toastr.options.escapeHtml = true;
+  });
+
+  {% comment %} Display toast notification for each message on page load {% endcomment %}
+  {% for message in messages %}
+    {% if 'no-toast' not in message.tags %}
+      {% if message.level == DEFAULT_MESSAGE_LEVELS.SUCCESS %}
+        displayToastTop({type: 'success', string: '{{ message|escapejs }}'});
+      {% elif message.level == DEFAULT_MESSAGE_LEVELS.WARNING %}
+        displayToastTop({type: 'warning', string: '{{ message|escapejs }}'});
+      {% elif message.level == DEFAULT_MESSAGE_LEVELS.ERROR %}
+        displayToastTop({type: 'error', string: '{{ message|escapejs }}'});
+      {% elif message.level == DEFAULT_MESSAGE_LEVELS.INFO %}
+        displayToastTop({type: 'info', string: '{{ message|escapejs }}'});
+      {% elif message.level == DEFAULT_MESSAGE_LEVELS.DEBUG %}
+        displayToastTop({type: 'info', string: '{{ message|escapejs }}'});
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+
+  // Handle library-filter accordion clicks
+  $(document).ready(function() {
+    // Listen for clicks on library-filter accordions or their toggle controls
+    $(document).on('click', '.library-filter, [data-bs-target*=".library-filter"], [href*=".library-filter"]', function(e) {
+      // Get the accordion ID if available
+      let accordionId = $(this).attr('id') ||
+                        $(this).attr('data-bs-target') ||
+                        $(this).attr('href') ||
+                        'unknown';
+
+      // If this is just an ID string, clean it up
+      if (typeof accordionId === 'string') {
+        accordionId = accordionId.replace(/^[#.]/, '');
+      }
+
+      $.ajax({
+        url: '/home/ajax/session/update',
+        type: 'POST',
+        dataType: 'json',
+        data: {
+          'session_data': 'filter',
+        },
+        success: function(response) {
+          if (response && response.message) {
+            console.log('Library filter state updated:', response.message);
+          }
+        }
+      });
+    });
+  });
+
+  {% if request.user.is_authenticated %}
+    {% comment %} Configure WebSockets protocol – HTTP for dev and HTTPS for prod {% endcomment %}
+    let ws_proto = 'ws://'
+    if (location.protocol === 'https:') {
+      ws_proto = 'wss://'
+    }
+    const protocol = ws_proto
+    const username = '{{ request.user.get_clean_username|escapejs }}';
+
+    {% comment %} Connect to channel for individual notifications {% endcomment %}
+    const ws_user = new WebSocket(
+      protocol + window.location.host +
+      '/ws/users/' + username + '/');
+
+    {% comment %} Connect to channel for all user notifications {% endcomment %}
+    const ws_all = new WebSocket(
+      protocol + window.location.host +
+      '/ws/users/all/');
+
+    {% comment %} Functions for sending messages {% endcomment %}
+    function sendMessage(socket, msg) {
+      {% comment %} Wait until the state of the socket is not ready and send the message when it is... {% endcomment %}
+      waitForSocketConnection(socket, function () {
+        socket.send(msg);
+      });
+    }
+
+    {% comment %} Make the function wait until the connection is made... {% endcomment %}
+    function waitForSocketConnection(socket, callback) {
+      setTimeout(
+        function () {
+          if (socket.readyState === 1) {
+            if (callback != null) {
+              callback();
             }
-        </script>
+          } else {
+            console.log('Waiting for connection...')
+            waitForSocketConnection(socket, callback);
+          }
+        }, 5); // wait 5 millisecond for the connection...
+    }
 
-        <!-- Activate Report with AJAX -->
-        <script>
-            $('.js-activate-report').click(function (e) {
-                var clickedBtn = $(this);
-                var url = $(this).attr('activate-report-url');
-                var reportId = $(this).attr('activate-report-id');
-                var csrftoken = $(this).attr('activate-report-csrftoken');
-                var shortcut = $('.active-report-shortcut');
-                var shortcut_url = shortcut.attr('href');
-                // Prep AJAX request with CSRF token
-                $.ajaxSetup({
-                    beforeSend: function(xhr, settings) {
-                        if (!csrfSafeMethod(settings.type) && !this.crossDomain) {
-                            xhr.setRequestHeader('X-CSRFToken', csrftoken);
-                        }
-                    }
-                });
-                // Send AJAX POST request
-                $.ajax({
-                    url: url,
-                    type: 'POST',
-                    dataType: 'json',
-                    data: {
-                        'report': reportId
-                    },
-                    success: function (data) {
-                        if (data['result'] == 'success') {
-                            $('.empty-report').addClass('selected-report');
-                            $('.empty-report').toggleClass('empty-report');
-                            $('.selected-report').each(function(index, ele) {
-                                if (reportId != $(this).attr('activate-report-id')) {
-                                    $(this).toggleClass('selected-report');
-                                }
-                            });
-                            $('.js-activate-report').each(function(index, ele) {
-                                if (reportId == $(this).attr('activate-report-id') && !$(this).hasClass('selected-report')) {
-                                    $(this).toggleClass('selected-report');
-                                    $(this).addClass('toggle-on-icon');
-                                    $(this).removeClass('toggle-off-icon');
-                                } else {
-                                    $(this).show(1000);
-                                    $(this).removeClass('toggle-on-icon');
-                                    $(this).addClass('toggle-off-icon');
-                                }
-                            });
-                            // Update shortcut button
-                            var current_value = shortcut_url.substring(shortcut_url.lastIndexOf('/') + 1);
-                            if (current_value == reportId) {
-                                shortcut.attr('href', shortcut_url);
-                            } else {
-                                shortcut.attr('href', shortcut_url.replace(current_value, reportId));
-                                shortcut.text('Jump to Report');
-                                shortcut.removeClass('btn-disabled');
-                            }
-                        }
-                        if (data['message']) {
-                            displayToastTop({type:data['result'], string:data['message'], title:'Report Update', delay:5});
-                            setTimeout(function(){
-                                window.location.href = shortcut_url;
-                            }, 5000);
-                        }
-                    }
-                });
-                // Prevent the AJAX POST from triggering twice
-                e.stopImmediatePropagation();
-            });
-        </script>
+    {% comment %} Handle receiving messages on channels {% endcomment %}
+    ws_user.onmessage = function (e) {
+      let data = JSON.parse(e.data);
+      displayToastTop({type: data.message.level, string: data.message.message, title: data.message.title});
+    }
+    ws_all.onmessage = function (e) {
+      let data = JSON.parse(e.data);
+      displayToastTop({type: data.message.level, string: data.message.message, title: data.message.title});
+    };
 
-        <!-- Script for Sidebar -->
-        <script>
-            $('.sidebar-header-tab').click(function (e) {
-                sidebarOpen();
-            });
+    {% comment %} Handle unexpected WebSocket closures {% endcomment %}
+    ws_user.onclose = function () {
+      console.error('User notification WebSocket closed unexpectedly');
+    };
+    ws_all.onclose = function () {
+      console.error('Global notification WebSocket closed unexpectedly');
+    };
+  {% endif %}
 
-            function sidebarOpen() {
-                $('#sidebar').toggleClass('active');
-                $('.sidebar-toggle-btn').toggleClass("fa-flip-horizontal");
-               // Send AJAX POST request
-               $.ajax({
-                    url: '/home/ajax/session/update',
-                    type: 'POST',
-                    dataType: 'json',
-                    data: {
-                        'session_data': 'sidebar',
-                    },
-                });
+  // Make sidebar dropdowns behave like an accordion without overriding
+  // Bootstrap's click and keyboard handling.
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar) {
+    sidebar.addEventListener('show.bs.collapse', function (event) {
+      sidebar.querySelectorAll('.collapse.show').forEach(function (openDropdown) {
+        if (openDropdown !== event.target) {
+          bootstrap.Collapse.getOrCreateInstance(openDropdown, {toggle: false}).hide();
+        }
+      });
+    });
+  }
+
+  // Helper to get banner content as a unique key
+  function getBannerKey() {
+    const title = document.querySelector('#globalBanner .alert-heading')?.innerText || '';
+    const message = document.querySelector('#globalBanner .alert')?.innerText || '';
+    // Simple hash: base64 of title+message
+    return btoa(encodeURIComponent(title + message));
+  }
+
+  const bannerKey = getBannerKey();
+  const bannerStorageKey = 'globalBannerDismissed';
+  const bannerDismissedKey = localStorage.getItem(bannerStorageKey);
+
+  // Hide banner if dismissed and content matches
+  if (bannerDismissedKey === bannerKey) {
+    document.getElementById('globalBanner').style.display = 'none';
+  }
+
+  // Handle close button click
+  document.querySelector('#globalBanner .btn-close')?.addEventListener('click', function() {
+    localStorage.setItem(bannerStorageKey, bannerKey);
+    document.getElementById('globalBanner').style.display = 'none';
+  });
+</script>
+
+{% comment %} Blocks used by forms that use Bootstrap tabs {% endcomment %}
+{% block tabs %}
+  <script>
+    $(function () {
+      function getTabLink(hash) {
+        return $('ul.nav a[data-tab-hash="' + hash + '"], ul.nav a[href="' + hash + '"]').first();
+      }
+
+      let hash = window.location.hash.replace(/[^\w-#]/g, '');
+      let tabLink = hash ? getTabLink(hash) : $();
+      if (tabLink.length) {
+        tabLink.tab('show');
+      }
+
+      $('.nav-tabs a').click(function (e) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        $(this).tab('show');
+
+        const tabHash = $(this).data('tab-hash') || $(this).attr('href');
+        if (tabHash && window.location.hash !== tabHash) {
+          window.history.pushState(null, '', tabHash);
+        }
+      });
+
+      $('#tab-bar').on('keydown', 'a[data-bs-toggle="tab"]', function (event) {
+        const tabs = Array.from(this.closest('#tab-bar').querySelectorAll('a[data-bs-toggle="tab"]'));
+        const currentIndex = tabs.indexOf(this);
+        let nextIndex;
+
+        if (event.key === 'ArrowRight') {
+          nextIndex = (currentIndex + 1) % tabs.length;
+        } else if (event.key === 'ArrowLeft') {
+          nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+        } else if (event.key === 'Home') {
+          nextIndex = 0;
+        } else if (event.key === 'End') {
+          nextIndex = tabs.length - 1;
+        } else {
+          return;
+        }
+
+        event.preventDefault();
+        tabs[nextIndex].focus();
+        tabs[nextIndex].click();
+      });
+    });
+  </script>
+{% endblock %}
+
+{% block tabforms %}
+  {% comment %} Handle the Delete and Undo buttons {% endcomment %}
+  <script>
+    window.gwHighlightNewFormset = function (formsetElement) {
+      if (!formsetElement) {
+        return;
+      }
+
+      const clearHighlights = function () {
+        document.querySelectorAll('.formset-new-highlight').forEach(function (highlightedFormset) {
+          if (highlightedFormset._gwFormsetHighlightTimeoutId) {
+            window.clearTimeout(highlightedFormset._gwFormsetHighlightTimeoutId);
+            highlightedFormset._gwFormsetHighlightTimeoutId = null;
+          }
+          highlightedFormset.classList.remove('formset-new-highlight');
+        });
+      };
+
+      const applyHighlight = function () {
+        if (window._gwFormsetHighlightRunId !== highlightRunId) {
+          return;
+        }
+
+        clearHighlights();
+        formsetElement.classList.remove('formset-new-highlight');
+        void formsetElement.offsetWidth;
+        formsetElement.classList.add('formset-new-highlight');
+        formsetElement._gwFormsetHighlightTimeoutId = window.setTimeout(function () {
+          formsetElement.classList.remove('formset-new-highlight');
+          formsetElement._gwFormsetHighlightTimeoutId = null;
+        }, 1800);
+      };
+
+      const scrollFormsetIntoView = function () {
+        const rect = formsetElement.getBoundingClientRect();
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const topOffset = 175;
+        const bottomOffset = 32;
+        const prefersReducedMotion = window.matchMedia &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const targetScrollY = Math.max(window.scrollY + rect.top - topOffset, 0);
+
+        if (rect.top < topOffset || rect.bottom > viewportHeight - bottomOffset) {
+          const $scrollContainer = $('html, body');
+
+          if (
+            $scrollContainer.is(':animated') &&
+            Math.abs(window._gwFormsetScrollTargetY - targetScrollY) < 4
+          ) {
+            return;
+          }
+
+          if (prefersReducedMotion) {
+            $scrollContainer.stop(true, false);
+            window._gwFormsetScrollTargetY = null;
+            window.scrollTo(0, targetScrollY);
+            return;
+          }
+
+          window._gwFormsetScrollTargetY = targetScrollY;
+          $scrollContainer.stop(true, false).animate({
+            scrollTop: targetScrollY,
+          }, 550, 'swing').promise().always(function () {
+            if (Math.abs(window._gwFormsetScrollTargetY - targetScrollY) < 4) {
+              window._gwFormsetScrollTargetY = null;
             }
-        </script>
+          });
+        }
+      };
 
-        <!-- Scripts for Hamburger Menus -->
-        <script>
-            function hamburger(x) {
-                x.classList.toggle('change');
+      const scheduleHighlight = function () {
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(function () {
+            scrollFormsetIntoView();
+            applyHighlight();
+          });
+        });
+      };
+
+      const highlightRunId = (window._gwFormsetHighlightRunId || 0) + 1;
+      window._gwFormsetHighlightRunId = highlightRunId;
+      clearHighlights();
+
+      [400, 700, 1000].forEach(function (delay, index) {
+        window.setTimeout(function () {
+          if (window._gwFormsetHighlightRunId === highlightRunId) {
+            if (index === 0) {
+              scheduleHighlight();
+            } else {
+              window.requestAnimationFrame(scrollFormsetIntoView);
             }
-        </script>
+          }
+        }, delay);
+      });
+    };
 
-        <script>
-            $(document).on('click', function(e){
-                if ($('.dropdown-menu-btn').hasClass('change')) {
-                    $('.dropdown-menu-btn').toggleClass('change');
-                }
-            });
-        </script>
+    $(document).on('click', '.formset-del-button', function () {
+      // Get the parent divs for this formset instance
+      let parent_div = $(this).closest('div.formset-container');
+      let formset_instance = parent_div.find('div.formset');
+      // Find the parent formset's Bootstrap alert div
+      let alert = parent_div.find('div.alert');
+      // Find the hidden DELETE checkbox and check it
+      let del_checkbox = formset_instance.find(":input[id*='DELETE']");
+      console.log(del_checkbox);
+      del_checkbox.eq(0).prop('checked', true);
+      console.log(del_checkbox.eq(0).prop('checked'));
+      // Hide the formset instance and display the alert
+      formset_instance.hide();
+      $(alert).show();
+    });
 
-        <!-- Script for Collapsibles -->
-        <script>
-            var coll = document.getElementsByClassName('collapsible');
-            var i;
-            for (i = 0; i < coll.length; i++) {
-              coll[i].addEventListener('click', function () {
-                this.classList.toggle('active');
-                var content = this.nextElementSibling;
-                if (content.style.maxHeight) {
-                  content.style.maxHeight = null;
-                } else {
-                  content.style.maxHeight = content.scrollHeight + 'px';
-                }
-              });
-            }
-        </script>
+    $(document).on('click', '.formset-undo-button', function () {
+      // Get the parent divs for the formset instance
+      let parent_div = $(this).closest('div.formset-container');
+      let formset_instance = parent_div.find('div.formset');
+      // Find the hidden DELETE checkbox and uncheck it
+      let del_checkbox = formset_instance.find(":input[id*='DELETE']");
+      console.log(del_checkbox);
+      del_checkbox.eq(0).prop('checked', false);
+      console.log(del_checkbox.eq(0).prop('checked'));
+      // Show the formset instance and hide the alert
+      formset_instance.show();
+      $(this).hide();
+    });
+  </script>
 
-        <!-- Script for Bootstrap Hover Tooltip -->
-        <script>
-            $(document).ready(function () {
-              $('[data-toggle="tooltip"]').tooltip();
-            });
-        </script>
+  {% comment %} Switch to Tab with Invalid Inputs {% endcomment %}
+  <script>
+    // Open tab with the first invalid/missing field on submission but before POST
+    $('[id^="submit-id-"]').click(function () {
+      $(':input:invalid').each(function () {
+        // Find the tab-pane that this element is inside, and get the id
+        let $closest = $(this).closest('.tab-pane');
+        let id = $closest.attr('id');
 
-        <!-- Script to Opening Accordions on Link -->
-        <script>
-            // Modification of https://gist.github.com/raddevon/8958486
-            function openAnchorAccordion() {
-              if (window.location.hash) {
-                var jQuerytarget = jQuery('body').find(window.location.hash);
-                if (jQuerytarget.hasClass('collapse')) {
-                  var jQuerytargetAccordion = jQuerytarget.find('.collapse');
-                  jQuerytarget.collapse('show');
-                }
-              }
-            }
+        // Find the link that corresponds to the pane and have it show
+        $('.nav a[data-bs-target="#' + id + '"], .nav a[href="#' + id + '"]').first().tab('show');
 
-            openAnchorAccordion();
+        // Only want to do it once
+        return false;
+      });
+    });
+    // Open tab with the first invalid/missing field when returning from a POST that failed validation
+    $(window).on('load', function () {
+      $('input.is-invalid').each(function () {
+        // Find the tab-pane that this element is inside, and get the id
+        let $closest = $(this).closest('.tab-pane');
+        let id = $closest.attr('id');
 
-            jQuery('body').on('click', 'a', openAnchorAccordion);
-        </script>
+        // Find the link that corresponds to the pane and have it show
+        $('.nav a[data-bs-target="#' + id + '"], .nav a[href="#' + id + '"]').first().tab('show');
 
-        {% comment %} All of the Toastr JavaScript {% endcomment %}
-        <script>
-            // Default Configuration
-            $(document).ready(function () {
-              toastr.options = {
-                'closeButton': true,
-                'debug': false,
-                'newestOnTop': false,
-                'progressBar': true,
-                'positionClass': 'toast-top-right',
-                'preventDuplicates': false,
-                'showDuration': '1000',
-                'hideDuration': '1000',
-                'timeOut': '4000',
-                'extendedTimeOut': '4000',
-                'showEasing': 'swing',
-                'hideEasing': 'linear',
-                'showMethod': 'fadeIn',
-                'hideMethod': 'fadeOut',
-              }
-              // Need to set this outside of the dict per the README
-              // https://github.com/CodeSeven/toastr#escape-html-characters
-              toastr.options.escapeHtml = true;
-            });
+        // Only want to do it once
+        return false;
+      });
+      // If no invalid fields, look for invalid-feedback messages
+      // This catches invalid fields enhanced by a rich-text editor
+      $('span.invalid-feedback').each(function () {
+        // Find the tab-pane that this element is inside, and get the id
+        let $closest = $(this).closest('.tab-pane');
+        let id = $closest.attr('id');
 
-            // Display toast notification for each message on page load
-            {% for message in messages %}
-                {% if "no-toast" not in message.tags %}
-                    {% if message.level == DEFAULT_MESSAGE_LEVELS.SUCCESS %}
-                        displayToastTop({type:'success', string:'{{ message }}'});
-                    {% elif message.level == DEFAULT_MESSAGE_LEVELS.WARNING %}
-                        displayToastTop({type:'warning', string:'{{ message }}'});
-                    {% elif message.level == DEFAULT_MESSAGE_LEVELS.ERROR %}
-                        displayToastTop({type:'error', string:'{{ message }}'});
-                    {% elif message.level == DEFAULT_MESSAGE_LEVELS.INFO %}
-                        displayToastTop({type:'info', string:'{{ message }}'});
-                    {% elif message.level == DEFAULT_MESSAGE_LEVELS.DEBUG %}
-                        displayToastTop({type:'info', string:'{{ message }}'});
-                    {% endif %}
-                {% endif %}
-            {% endfor %}
-        </script>
+        // Find the link that corresponds to the pane and have it show
+        $('.nav a[data-bs-target="#' + id + '"], .nav a[href="#' + id + '"]').first().tab('show');
 
-        {% comment %} JavaScript for connecting WebSockets {% endcomment %}
-        {% if user.is_authenticated %}
-            <!-- Script for WebSockets Group for Authenticated Users -->
-            <script>
-                // Connect to channel for individual notifications
-                var username = '{{ user }}';
-                var protocol = "ws://"
-                if (location.protocol == "https:") {
-                    protocol = "wss://"
-                }
-                var ws_user = new WebSocket(
-                  protocol + window.location.host +
-                  '/ws/users/' + username + '/');
-                // Connect to channel for all user notifications
-                var ws_all = new WebSocket(
-                  protocol + window.location.host +
-                  '/ws/users/all/');
+        // Only want to do it once
+        return false;
+      });
+    });
 
-                // Functions for sending messages
-                function sendMessage(socket, msg) {
-                  // Wait until the state of the socket is not ready and send the message when it is...
-                  waitForSocketConnection(socket, function () {
-                    socket.send(msg);
-                  });
-                }
-                // Make the function wait until the connection is made...
-                function waitForSocketConnection(socket, callback) {
-                  setTimeout(
-                    function () {
-                      if (socket.readyState === 1) {
-                        if (callback != null) {
-                          callback();
-                        }
-                      } else {
-                        console.log('Waiting for connection...')
-                        waitForSocketConnection(socket, callback);
-                      }
-                    }, 5); // wait 5 milisecond for the connection...
-                }
+  </script>
+{% endblock %}
 
-                // Handle receiving messages on channels
-                ws_user.onmessage = function (e) {
-                  var data = JSON.parse(e.data);
-                  if (data.assignments !== undefined) {
-                    document.getElementById('assignment-count').innerHTML = data.assignments
-                  }
-                  displayToastTop({type:data.message.level, string:data.message.message, title:data.message.title});
-                }
-                ws_all.onmessage = function (e) {
-                  var data = JSON.parse(e.data);
-                  displayToastTop({type:data.message.level, string:data.message.message, title:data.message.title});
-                };
-
-                // Handle unexpected WebSocket closures
-                ws_user.onclose = function (e) {
-                  console.error('User notification WebSocket closed unexpectedly');
-                };
-                ws_all.onclose = function (e) {
-                  console.error('Global notification WebSocket closed unexpectedly');
-                };
-            </script>
-        {% endif %}
-
-        {% comment %} Sections for scripts used by forms that use Bootstrap tabs {% endcomment %}
-        {% block tabs %}
-            <!-- Switch to Tab from URL and Slow Scroll -->
-            <script>
-                $(window).on('load', function() {
-                    if (window.location.hash) {
-                        $('html, body').animate({
-                            scrollTop: $( $('.nav a[href="' + window.location.hash + '"]') ).offset().top
-                        }, 1000);
-                    }
-                });
-            </script>
-
-            <!-- Update Location with Tab Anchor -->
-            <script>
-                $(function(){
-                    var hash = window.location.hash;
-                    hash && $('ul.nav a[href="' + hash + '"]').tab('show');
-
-                    $('.nav-tabs a').click(function (e) {
-                        $(this).tab('show');
-                        var scrollmem = $('body').scrollTop() || $('html').scrollTop();
-                        window.location.hash = this.hash;
-                        $('html, body').scrollTop(scrollmem);
-                    });
-                });
-            </script>
-        {% endblock %}
-
-        {% block tabforms %}
-            <!-- Handle the Delete and Undo buttons -->
-            <script>
-                $(document).on("click", ".formset-del-button", function() {
-                    // Get the parent divs for this formset instance
-                    var parent_div = $(this).closest("div.formset-container");
-                    var formset_instance = parent_div.find("div.formset");
-                    // Find the parent formset's Bootstrap alert div
-                    var alert = parent_div.find("div.alert");
-                    // Find the hidden DELETE checkbox and check it
-                    var del_checkbox = formset_instance.find(":input[id*='DELETE']");
-                    console.log(del_checkbox);
-                    del_checkbox.eq(0).prop("checked", true);
-                    console.log(del_checkbox.eq(0).prop("checked"));
-                    // Hide the formset instance and display the alert
-                    formset_instance.hide();
-                    $(alert).show();
-                });
-
-                $(document).on("click", ".formset-undo-button", function() {
-                    // Get the parent divs for the formset instance
-                    var parent_div = $(this).closest("div.formset-container");
-                    var formset_instance = parent_div.find("div.formset");
-                    // Find the hidden DELETE checkbox and uncheck it
-                    var del_checkbox = formset_instance.find(":input[id*='DELETE']");
-                    console.log(del_checkbox);
-                    del_checkbox.eq(0).prop("checked", false);
-                    console.log(del_checkbox.eq(0).prop("checked"));
-                    // Show the formset instance and hide the alert
-                    formset_instance.show();
-                    $(this).hide();
-                });
-            </script>
-
-            <!-- Switch to Tab with Invalid Inputs -->
-            <script>
-                // Open tab with the first invalid/missing field on submission but before POST
-                $('#submit-id-submit').click(function () {
-                    $('input:invalid').each(function () {
-                        // Find the tab-pane that this element is inside, and get the id
-                        var $closest = $(this).closest('.tab-pane');
-                        var id = $closest.attr('id');
-
-                        // Find the link that corresponds to the pane and have it show
-                        $('.nav a[href="#' + id + '"]').tab('show');
-
-                        // Only want to do it once
-                        return false;
-                    });
-                });
-                // Open tab with the first invalid/missing field when returning from a POST that failed validation
-                $(window).on('load', function() {
-                    $('input.is-invalid').each(function () {
-                        // Find the tab-pane that this element is inside, and get the id
-                        var $closest = $(this).closest('.tab-pane');
-                        var id = $closest.attr('id');
-
-                        // Find the link that corresponds to the pane and have it show
-                        $('.nav a[href="#' + id + '"]').tab('show');
-
-                        // Only want to do it once
-                        return false;
-                    });
-                    // If no invalid fields, look for invalid-feedback messages
-                    // This catches invalid fields taken over by TinyMCE
-                    $('span.invalid-feedback').each(function () {
-                        // Find the tab-pane that this element is inside, and get the id
-                        var $closest = $(this).closest('.tab-pane');
-                        var id = $closest.attr('id');
-
-                        // Find the link that corresponds to the pane and have it show
-                        $('.nav a[href="#' + id + '"]').tab('show');
-
-                        // Only want to do it once
-                        return false;
-                    });
-                });
-            </script>
-        {% endblock %}
-
-        {% comment %} Block to hold additional one-off JavaScript needed by an individual template {% endcomment %}
-        {% block morescripts %}{% endblock %}
-    </body>
+{% comment %} Block to hold additional one-off JavaScript needed by an individual template {% endcomment %}
+{% block morescripts %}{% endblock %}
+<script src="{% static 'js/collection-add-footer.js' %}"></script>
+</body>
 </html>

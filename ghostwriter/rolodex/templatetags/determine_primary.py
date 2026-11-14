@@ -1,15 +1,14 @@
-"""This contains the custom template tags used by he Rolodex application."""
+"""This contains the custom template tags used by the Rolodex application."""
 
 # Standard Libraries
-from collections import defaultdict
 import datetime
+from collections import defaultdict
 
-
+# Django Imports
 from django import template
 
 # Ghostwriter Libraries
 from ghostwriter.rolodex.models import ObjectivePriority
-from ghostwriter.shepherd.models import AuxServerAddress
 
 register = template.Library()
 
@@ -26,8 +25,7 @@ def get_primary_address(value):
         Individual :model:`shepherd.StaticServer` entry
     """
     primary_address = value.ip_address
-    aux_addresses = AuxServerAddress.objects.filter(static_server=value)
-    for address in aux_addresses:
+    for address in value.auxserveraddress_set.all():
         if address.primary:
             primary_address = address.ip_address
     return primary_address
@@ -58,19 +56,24 @@ def plus_days(value, days):
     ``days``
         A whole integer to add to the day value of a ``datetime`` value
     """
+    if value is None:
+        return value
     return value + datetime.timedelta(days=days)
 
 
 @register.filter
 def days_left(value):
     """
-    Calculate how many days between the current date and a provide ``datetime`` value.
+    Calculate how many days between the current date and provide a ``datetime`` value.
 
     **Parameters**
 
     ``value``
         A ``datetime`` value
     """
+    if isinstance(value, datetime.datetime):
+        value = value.date()
+
     today = datetime.date.today()
     delta = value - today
     return delta.days
@@ -83,10 +86,10 @@ def get_item(dictionary, key):
 
     **Parameters**
 
-    ``dictonary``
+    ``dictionary``
         Python dictionary object to parse
     ``key``
-        Key name tor etrieve from the dictionary
+        Key name to retrieve from the dictionary
     """
     # Use `get` to return `None` if not found
     return dictionary.get(key)
@@ -108,5 +111,5 @@ def group_by_priority(queryset):
         priority_dict[str(priority)] = []
     for objective in queryset:
         priority_dict[str(objective.priority)].append(objective)
-    # Return a basic dict because templates can't handle defaultdict
+    # Return a basic dict because templates can't handle the defaultdict type
     return dict(priority_dict)

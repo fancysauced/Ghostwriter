@@ -4,54 +4,113 @@
 
 {% block pagetitle %}Operation Logs{% endblock %}
 
-{% block breadcrumbs %}
-    <nav aria-label="breadcrumb">
-        <ul class="breadcrumb">
-            <li class="breadcrumb-item"><a href="{% url 'home:dashboard' %}">Dashboard</a></li>
-            <li class="breadcrumb-item active" aria-current="page">Operation Logs</li>
-        </ul>
-    </nav>
-{% endblock %}
 
 {% block content %}
+  <div class="library-page oplog-library-page d-grid gap-4">
+    <header class="library-page-heading">
+      <div class="library-page-heading-main">
+        <div class="library-page-title-row">
+          <h2>Operation Logs</h2>
+          <span class="library-result-count">{{ oplog_list|length }} log{{ oplog_list|length|pluralize }}</span>
+        </div>
+        <p>Open an operation log, create a workspace for a project, or import an existing log.</p>
+      </div>
+      <div class="library-page-actions">
+        <a class="btn btn-primary icon add-icon" href="{% url 'oplog:oplog_create_no_project' %}">Create Log</a>
+        <a class="btn btn-outline-primary icon upload-icon" href="{% url 'oplog:oplog_import' %}">Import Log</a>
+        {% if oplog_list %}
+          <button id="resetSortBtn" class="btn btn-outline-secondary icon sync-icon"
+                  type="button">Reset Sort</button>
+        {% endif %}
+      </div>
+    </header>
+
     {% comment %} Conditional display of API key for newly created oplogs {% endcomment %}
     {% for message in messages %}
-        {% if "api-key" in message.tags %}
-            <div class="alert alert-success" role="alert">
-                <h4 style="margin-top: 0;" class="alert-heading">Hey You!</h4>
-                {{ message|linebreaks }}
-            </div>
-        {% endif %}
+      {% if "api-key" in message.tags %}
+        <div class="alert alert-success mb-0" role="alert">
+          <h4 class="alert-heading mt-0">Operation Log API Key</h4>
+          {{ message|linebreaks }}
+        </div>
+      {% endif %}
     {% endfor %}
 
-    <!-- Oplog Table Section -->
-    <p>
-        <a class="icon add-icon" href="{% url 'oplog:oplog_create_no_project' %}">Start New Operation Log</a>
-        <span style="padding-right: 20px; padding-left: 20px;">OR</span>
-        <a class="icon upload-icon" href="{% url 'oplog:oplog_import' %}">Import Oplog</a>
-    </p>
-    {% if op_logs %}
-        <table id="oplogTable" class="tablesorter table table-hover table-striped table-sm">
+    <section class="library-results oplog-library-results" aria-label="Operation Logs">
+      {% if oplog_list %}
+        <div class="library-guidance" role="note">
+          <i class="fas fa-bell" aria-hidden="true"></i>
+          <p><strong>Notifications:</strong> active logs are included when Ghostwriter runs the “Review Active Logs” task.</p>
+        </div>
+        <div class="table-responsive data-table-frame library-table-frame">
+          <table id="oplogTable" class="tablesorter table table-hover library-table library-table-wide">
             <thead>
-                <tr>
-                    <th class="align-middle">ID</th>
-                    <th class="align-middle">Name</th>
-                    <th class="align-middle">Project</th>
-                    <th class="sorter-false align-middle">Export CSV</th>
-                </tr>
+              <tr>
+                <th class="align-middle text-start">ID</th>
+                <th class="align-middle text-start">Name</th>
+                <th class="align-middle text-start">Project</th>
+                <th class="align-middle text-start sorter-false">Notifications</th>
+                <th class="sorter-false align-middle text-end">Export</th>
+              </tr>
             </thead>
-            {% for log in op_logs %}
+            <tbody>
+              {% for log in oplog_list %}
                 <tr>
-                    <td class="align-middle">{{ log.id }}</td>
-                    <td class="align-middle"><a class="clickable" href="{% url 'oplog:oplog_entries' log.pk %}">{{ log.name }}</a></td>
-                    <td class="align-middle">{{ log.project.client }} {{ log.project.project_type }} ({{ log.project.start_date }})</td>
-                    <td class="align-middle js-export-oplog" oplog-id="{{ log.pk }}" oplog-name="{{ log.name }}"><a href="javascript:void(0);" class="btn btn-secondary col-md-12">Export</a></td>
+                  <td class="align-middle text-start" data-label="ID">
+                    <span class="library-count-badge">{{ log.id }}</span>
+                  </td>
+                  <td class="align-middle text-start library-primary-cell" data-label="Name">
+                    <a class="table-primary-link library-primary-link" href="{% url 'oplog:oplog_entries' log.pk %}">
+                      <span>{{ log.name }}</span>
+                      <i class="fas fa-arrow-right" aria-hidden="true"></i>
+                    </a>
+                  </td>
+                  <td class="align-middle text-start" data-label="Project">
+                    {{ log.project.client.short_name }} {{ log.project.project_type }} ({{ log.project.start_date }})
+                  </td>
+                  <td class="align-middle text-start" data-label="Notifications">
+                    {% if log.mute_notifications %}
+                      <span class="library-tag library-tag-neutral">
+                        <i class="fas fa-bell-slash" aria-hidden="true"></i>
+                        Silenced
+                      </span>
+                    {% else %}
+                      <span class="library-tag library-tag-success">
+                        <i class="fas fa-bell" aria-hidden="true"></i>
+                        Active
+                      </span>
+                    {% endif %}
+                  </td>
+                  <td class="align-middle text-end js-export-oplog" data-label="Export"
+                      oplog-id="{{ log.pk }}" oplog-name="{{ log.name }}"
+                      export_url="{% url 'oplog:oplog_export' log.id %}">
+                    <div class="library-row-actions oplog-export-actions">
+                      <button type="button" class="report-row-action"
+                              title="Export {{ log.name }}" aria-label="Export {{ log.name }}">
+                        <i class="fas fa-file-export" aria-hidden="true"></i>
+                      </button>
+                      <a href="{% url 'oplog:oplog_export' log.id %}?format=json" class="report-row-action"
+                         title="Export {{ log.name }} as JSON" aria-label="Export {{ log.name }} as JSON">
+                        <i class="fas fa-file-code" aria-hidden="true"></i>
+                      </a>
+                    </div>
+                  </td>
                 </tr>
-            {% endfor %}
-        </table>
-    {% else %}
-        <p class="mt-3">There are no logs to see here yet. Start or import a log up above.</p>
-    {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-state m-3">
+          <p class="empty-state-title">No operation logs yet</p>
+          <p class="empty-state-description">Create a log for a project or import an existing operation log.</p>
+          <div class="d-flex flex-wrap gap-2 mt-3">
+            <a class="btn btn-primary btn-sm icon add-icon" href="{% url 'oplog:oplog_create_no_project' %}">Create Log</a>
+            <a class="btn btn-outline-primary btn-sm icon upload-icon" href="{% url 'oplog:oplog_import' %}">Import Log</a>
+          </div>
+        </div>
+      {% endif %}
+    </section>
+  </div>
 {% endblock %}
 
 {% block morescripts %}
@@ -61,29 +120,34 @@
             $("#oplogTable").tablesorter(
                 {
                     cssAsc: ' down', cssDesc: 'up', cssNone: 'none',
-                }); $('.tablesorter').trigger('update');
+                    widgets: ['saveSort'],
+                    widgetOptions: {
+                      saveSort: true,
+                      storage_page: 'oplogLibraryTable'
+                    }
+                });
+
+            $('.tablesorter').trigger('update');
+
+            $('#resetSortBtn').click(function() {
+              $('#oplogTable')
+                .trigger('saveSortReset')
+                .trigger('sortReset');
+              return false;
+            });
         });
     </script>
 
     <!-- Export Oplog with JS -->
     <script>
-        function download(url, filename) {
-            fetch(url).then(function (t) {
-                return t.blob().then((b) => {
-                    var a = document.createElement("a");
-                    a.href = URL.createObjectURL(b);
-                    a.setAttribute("download", filename);
-                    a.click();
-                });
-            });
-        }
-
-        $(".js-export-oplog").on("click", function () {
-            id = $(this).attr('oplog-id')
-            name = $(this).attr('oplog-name')
-            base_name = `${name}-log-export-${id}.csv`
-            filename = generateDownloadName(base_name);
-            download(`/oplog/api/entries?export=csv&&oplog_id=${id}`, filename);
+        $(".js-export-oplog button.report-row-action").on("click", function () {
+            let exportCell = $(this).closest('.js-export-oplog')
+            let id = exportCell.attr('oplog-id')
+            let name = exportCell.attr('oplog-name')
+            let export_url = exportCell.attr('export_url')
+            let base_name = `${name}-log-export-${id}.csv`
+            let filename = generateDownloadName(base_name);
+            download(export_url, filename);
         });
     </script>
 {% endblock %}

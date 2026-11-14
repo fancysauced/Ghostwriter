@@ -1,4 +1,4 @@
-"""This contains all of the URL mappings used by the Home application."""
+"""This contains all the URL mappings used by the Home application."""
 
 # Django Imports
 from django.urls import path
@@ -11,12 +11,42 @@ app_name = "home"
 
 # URLs for the basic views
 urlpatterns = [
-    path("", views.dashboard, name="dashboard"),
+    path("", views.Dashboard.as_view(), name="dashboard"),
+    path(
+        "dashboard/exceptions/dismiss-all/",
+        views.DashboardExceptionDismissAll.as_view(),
+        name="dismiss_all_dashboard_exceptions",
+    ),
+    path(
+        "dashboard/exceptions/<str:task_id>/dismiss/",
+        views.DashboardExceptionDismiss.as_view(),
+        name="dismiss_dashboard_exception",
+    ),
     path("management/", views.Management.as_view(), name="management"),
+    path(
+        "navigation/preferences/",
+        views.update_sidebar_preferences,
+        name="sidebar_preferences",
+    ),
+    path(
+        "navigation/working-context/",
+        views.working_context_catalog,
+        name="working_context_catalog",
+    ),
+    path(
+        "navigation/workspace-pin/",
+        views.toggle_workspace_pin,
+        name="toggle_workspace_pin",
+    ),
 ]
 
 # URLs for AJAX test functions
 urlpatterns += [
+    path(
+        "ajax/editor-shortcuts/date",
+        views.editor_shortcuts_date,
+        name="ajax_editor_shortcuts_date",
+    ),
     path(
         "ajax/management/test/aws",
         views.TestAWSConnection.as_view(),

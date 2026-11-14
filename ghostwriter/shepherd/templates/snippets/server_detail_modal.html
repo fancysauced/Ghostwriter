@@ -1,0 +1,39 @@
+{% load bleach_tags determine_primary %}
+
+<div id="server_detail_{{ server.id }}" class="modal fade detail-preview-modal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-super-sized modal-dialog-scrollable modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <span class="detail-preview-modal-eyebrow">Reusable server</span>
+          <h2 class="modal-title">{{ server.ip_address }} {% if server.name %}({{ server.name }}){% endif %}</h2>
+        </div>
+        <button type="button" class="btn-close detail-preview-modal-close" data-bs-dismiss="modal" aria-label="Close">
+        </button>
+      </div>
+      <div class="modal-body">
+
+        {% if server.tags.all %}<div class="detail-preview-modal-tags">{% for tag in server.tags.all %}<span class="detail-preview-modal-tag">{{ tag.name }}</span>{% endfor %}</div>{% endif %}
+
+        <h5>Primary Address</h5>
+        {% get_primary_address server as primary_address %}
+        {{ primary_address }}
+
+        <h5 class="mt-3">Aux Addresses</h5>
+        {% if server.auxserveraddress_set %}
+          <ul>
+            {% for aux in server.auxserveraddress_set.all %}
+              <li>{{ aux }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p>No Other Addresses</p>
+        {% endif %}
+
+      </div>
+      <div class="modal-footer detail-preview-modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

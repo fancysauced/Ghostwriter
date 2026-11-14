@@ -1,0 +1,30 @@
+{% load bleach_tags %}
+
+<div id="observation_detail_{{ observation.id }}" class="modal fade detail-preview-modal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-super-sized modal-dialog-scrollable modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <span class="detail-preview-modal-eyebrow">Observation preview</span>
+          <h2 class="modal-title">{{ observation.title }}</h2>
+        </div>
+        <button type="button" class="btn-close detail-preview-modal-close" data-bs-dismiss="modal" aria-label="Close">
+        </button>
+      </div>
+      <div class="modal-body">
+
+        {% if observation.tags.all %}<div class="detail-preview-modal-tags">{% for tag in observation.tags.all %}<span class="detail-preview-modal-tag">{{ tag.name }}</span>{% endfor %}</div>{% endif %}
+
+        <h5>Description Preview</h5>
+        {% if observation.description %}
+          {{ observation.description|bleach|safe }}
+        {% else %}
+          <p>No description has been provided for this observation.</p>
+        {% endif %}
+      </div>
+      <div class="modal-footer detail-preview-modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

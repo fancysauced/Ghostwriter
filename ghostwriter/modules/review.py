@@ -9,7 +9,6 @@ properly categorized, has not been flagged in VirusTotal, or tagged with a bad c
 # Standard Libraries
 import logging
 import sys
-import traceback
 from time import sleep
 
 # 3rd Party Libraries
@@ -25,6 +24,10 @@ requests.packages.urllib3.disable_warnings()
 logger = logging.getLogger(__name__)
 
 
+class VirusTotalRequestError(RuntimeError):
+    """Raised when a VirusTotal request prevents a health update from completing."""
+
+
 class DomainReview:
     """
     Pull a list of domain names and check their web reputation.
@@ -34,7 +37,7 @@ class DomainReview:
     ``domain_queryset``
         Queryset for :model:`shepherd:Domain`
     ``sleep_time_override``
-        Number of seconds to sleep betwen VirusTotal API requests
+        Number of seconds to sleep between VirusTotal API requests
         (overrides global configuration)
     """
 
@@ -44,15 +47,26 @@ class DomainReview:
     # Categories we don't want to see
     # These are lowercase to avoid inconsistencies with how each service might return the categories
     blocklist = [
+        "adult/mature content",
+        "extreme",
+        "gambling",
+        "hacking",
+        "malicious outbound data/botnets",
+        "malicious sources",
+        "malicious sources/malnets",
+        "malware repository",
+        "nudity",
         "phishing",
-        "web ads/analytics",
-        "suspicious",
         "placeholders",
         "pornography",
-        "spam",
-        "gambling",
+        "potentially unwanted software",
         "scam/questionable/illegal",
-        "malicious sources/malnets",
+        "spam",
+        "spyware and malware",
+        "suspicious",
+        "violence/hate/racism",
+        "weapons",
+        "web ads/analytics",
     ]
 
     # Variables for web browsing
@@ -62,9 +76,7 @@ class DomainReview:
         # Get API configuration
         self.virustotal_config = VirusTotalConfiguration.get_solo()
         if self.virustotal_config.enable is False:
-            logger.error(
-                "Tried to start a domain review without VirusTotal configured and enabled"
-            )
+            logger.error("Tried to start a domain review without VirusTotal configured and enabled")
             sys.exit()
 
         self.domain_queryset = domain_queryset
@@ -97,41 +109,57 @@ class DomainReview:
         ``subdomains``
             Return a list of subdomains (Default: False)
         """
+        # The VT API is case-sensitive, so domains should always be lowercase
+        if not ignore_case:
+            domain = domain.lower()
+
         if subdomains:
-            virustotal_endpoint_uri = "/domains/{domain}/relationships/subdomains".format(
-                domain=domain
-            )
+            virustotal_endpoint_uri = "/domains/{domain}/relationships/subdomains".format(domain=domain)
         else:
             virustotal_endpoint_uri = "/domains/{domain}".format(domain=domain)
 
         url = self.VIRUSTOTAL_BASE_API_URL + virustotal_endpoint_uri
-        results = {}
-        results["result"] = "success"
-        if self.virustotal_config.enable:
-            # The VT API is case sensitive, so domains should always be lowercase
-            if not ignore_case:
-                domain = domain.lower()
-            try:
-                headers = {
-                    "x-apikey": self.virustotal_config.api_key,
-                }
-                req = self.session.get(url, headers=headers)
-                if req.ok:
-                    vt_data = req.json()
-                    results["data"] = vt_data["data"]["attributes"]
-                else:
-                    results["result"] = "error"
-                    results["error"] = "VirusTotal rejected the API key in settings"
-            except Exception:
-                trace = traceback.format_exc()
-                logger.exception("Failed to contact VirusTotal")
-                results["result"] = "error"
-                results["error"] = "{exception}".format(exception=trace)
-        else:
-            results["result"] = "error"
-            results["error"] = "VirusTotal is disabled in settings"
+        if not self.virustotal_config.enable:
+            raise VirusTotalRequestError("VirusTotal is disabled in settings")
 
-        return results
+        try:
+            headers = {
+                "x-apikey": self.virustotal_config.api_key,
+            }
+            req = self.session.get(url, headers=headers)
+            if not req.ok:
+                # A missing report is distinct from a failed API request. Only
+                # accept VT's structured error so proxy/endpoint 404s still fail.
+                if req.status_code == 404:
+                    try:
+                        error_code = req.json().get("error", {}).get("code")
+                    except (ValueError, AttributeError):
+                        error_code = None
+                    if error_code == "NotFoundError" and not subdomains:
+                        message = f"VirusTotal has no report for {domain} (HTTP 404, NotFoundError)."
+                        logger.warning(message)
+                        return {"result": "not_found", "error": message}
+
+                message = (
+                    f"VirusTotal rejected the API request for {domain} "
+                    f"(HTTP {req.status_code})."
+                )
+                if req.status_code in (401, 403):
+                    message += " Check the configured API key and permissions."
+                elif req.status_code == 429:
+                    message += " Check the VirusTotal API quota and rate limit."
+                logger.error(message)
+                raise VirusTotalRequestError(message)
+
+            vt_data = req.json()
+            return {"result": "success", "data": vt_data["data"]["attributes"]}
+        except VirusTotalRequestError:
+            raise
+        except Exception as err:
+            logger.exception("Failed to contact VirusTotal")
+            raise VirusTotalRequestError(
+                f"VirusTotal request for {domain} failed: {err.__class__.__name__}"
+            ) from err
 
     def check_domain_status(self):
         """
@@ -145,6 +173,7 @@ class DomainReview:
             # Ignore any expired domains because we don't control them anymore
             if domain.is_expired() is False:
                 domain_categories = {}
+                malicious_scans = []
                 bad_categories = []
                 burned_explanations = []
                 lab_results[domain.id] = {}
@@ -158,28 +187,35 @@ class DomainReview:
                 domain_name = domain.name
                 health = domain.health_status
 
-                # For notifications, track date of the last health check-up
+                # Log the previous check date for context during the review.
                 if domain.last_health_check:
                     logger.info(
                         "Domain has a prior health check-up date: %s",
                         domain.last_health_check,
                     )
-                    last_health_check = domain.last_health_check
-                # If the date is empty (no past checks), limit notifications with the purchase date
                 else:
-                    last_health_check = domain.creation
-                    logger.info(
-                        "No prior health check so set date to %s", last_health_check
-                    )
+                    logger.info("No prior health check; domain purchased on %s", domain.creation)
                 logger.info("Domain is currently considered to be %s", health)
 
                 # Check domain name with VT's Domain Report
                 vt_results = self.get_domain_report(domain_name)
+                if vt_results["result"] == "not_found":
+                    lab_results[domain.id]["error"] = vt_results["error"]
+                    sleep(self.sleep_time)
+                    continue
                 if vt_results["result"] == "success":
                     logger.info("Received results for %s from VirusTotal", domain_name)
 
                     domain_categories = {}
                     lab_results[domain.id]["vt_results"] = vt_results["data"]
+
+                    # Check if the domain is tagged as DGA
+                    if "tags" in vt_results["data"]:
+                        if "dga" in vt_results["data"]["tags"]:
+                            burned = True
+                            burned_explanations.append(
+                                "Domain is tagged with `DGA` for domain generation algorithm, and likely flagged for malware."
+                            )
 
                     # Check if VT returned the ``categories`` key with a list
                     if "categories" in vt_results["data"]:
@@ -196,21 +232,27 @@ class DomainReview:
                                 )
                                 burned = True
                                 burned_explanations.append(
-                                    "{source} has assigned the domain an undesirable category: {cat}".format(
-                                        source=source, cat=category
-                                    )
+                                    f"{source} has assigned the domain an undesirable category: {category}."
                                 )
 
                     # Check for any detections
                     if "last_analysis_stats" in vt_results["data"]:
                         analysis_stats = vt_results["data"]["last_analysis_stats"]
                         if analysis_stats["malicious"] > 0:
+                            for scanner, result in vt_results["data"]["last_analysis_results"].items():
+                                if result["category"] == "malicious":
+                                    malicious_scans.append(f"{scanner} ({result['result']})")
                             burned = True
                             burned_explanations.append(
-                                "A VirusTotal scanner has flagged the domain as malicious"
+                                "{} VirusTotal scanner(s) flagged the domain as malicious:\n{}".format(
+                                    analysis_stats["malicious"],
+                                    "\n".join(malicious_scans),
+                                )
                             )
                             logger.warning(
-                                "A VirusTotal scanner has flagged the %s as malicious",
+                                "%s VirusTotal scanners (%s) flagged the %s as malicious",
+                                analysis_stats["malicious"],
+                                ", ".join(malicious_scans),
                                 domain_name,
                             )
 
@@ -220,24 +262,23 @@ class DomainReview:
                         if votes["malicious"] > 0:
                             burned = True
                             burned_explanations.append(
-                                "There are {} VirusTotal community votes flagging the the domain as malicious".format(
+                                "There are {} VirusTotal community votes flagging the the domain as malicious.".format(
                                     votes["malicious"]
                                 )
                             )
                             logger.warning(
-                                "There are %s VirusTotal community votes flagging the the domain as malicious",
+                                "There are %s VirusTotal community votes flagging the the domain as malicious.",
                                 votes["malicious"],
                             )
 
                 else:
                     lab_results[domain.id]["vt_results"] = "none"
-                    logger.warning(
-                        "Did not receive results for %s from VirusTotal", domain_name
-                    )
+                    logger.warning("Did not receive results for %s from VirusTotal.", domain_name)
 
                 # Assemble the dictionary to return for this domain
                 lab_results[domain.id]["burned"] = burned
                 lab_results[domain.id]["categories"] = domain_categories
+                lab_results[domain.id]["scanners"] = malicious_scans
                 lab_results[domain.id]["warnings"]["messages"] = warnings
                 lab_results[domain.id]["warnings"]["total"] = len(warnings)
                 if burned:

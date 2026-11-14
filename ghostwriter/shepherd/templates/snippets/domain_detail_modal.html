@@ -1,0 +1,46 @@
+{% load bleach_tags shepherd_tags %}
+
+<div id="domain_detail_{{ domain.id }}" class="modal fade detail-preview-modal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-super-sized modal-dialog-scrollable modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <span class="detail-preview-modal-eyebrow">Domain preview</span>
+          <h2 class="modal-title">{{ domain.name }}</h2>
+        </div>
+        <button type="button" class="btn-close detail-preview-modal-close" data-bs-dismiss="modal" aria-label="Close">
+        </button>
+      </div>
+      <div class="modal-body">
+
+        {% if domain.tags.all %}<div class="detail-preview-modal-tags">{% for tag in domain.tags.all %}<span class="detail-preview-modal-tag">{{ tag.name }}</span>{% endfor %}</div>{% endif %}
+
+        <p>Health Status:
+        {% if domain.health_status.health_status == "Healthy" %}
+          <span class="healthy">{{ domain.health_status }}</span>
+        {% else %}
+          <span class="burned">{{ domain.health_status }}</span>
+        {% endif %}
+        <br></p>
+
+        <p>Auto-Renew Active: {{ domain.auto_renew }}<br></p>
+
+        <p>Domain Categorization:
+          {% if domain.categorization.items %}
+            <span class="align-middle">
+              {% for source, cat in domain.categorization.items %}
+                {{ cat|category_value|bleach|title }}{% if not forloop.last %},&nbsp;{% endif %}
+              {% endfor %}
+            </span>
+          {% else %}
+            <span class="align-middle">No Results</span>
+          {% endif %}
+        </p>
+
+      </div>
+      <div class="modal-footer detail-preview-modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

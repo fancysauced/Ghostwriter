@@ -1,8 +1,11 @@
-"""This contains all of the database models used by the Users application."""
+"""This contains all the database models used by the Users application."""
+
+# Standard Libraries
+from binascii import hexlify
 
 # Django Imports
 from django.contrib.auth.models import AbstractUser
-from django.db.models import CharField
+from django.db.models import BooleanField, CharField, EmailField, JSONField
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
@@ -14,14 +17,13 @@ active_roles = (
     ("user", "user"),
     ("manager", "manager"),
     ("admin", "admin"),
-    ("restricted", "restricted"),
 )
 
 
 class User(AbstractUser):
-    """
-    Stores an individual user's name.
-    """
+    """Stores an individual user's information."""
+
+    REQUIRED_FIELDS = ["role"]
 
     # First Name and Last Name do not cover name patterns around the globe
     name = CharField(_("Name of User"), blank=True, max_length=255)
@@ -43,15 +45,79 @@ class User(AbstractUser):
         blank=True,
         help_text="Enter a phone number for this user",
     )
-    role = CharField(max_length=120, choices=active_roles, default="user")
+    report_email = EmailField(
+        "Report Email",
+        blank=True,
+        default="",
+        help_text="Optional email address to display for this user in project and report team lists",
+    )
+    role = CharField(
+        max_length=120,
+        choices=active_roles,
+        default="user",
+        help_text="Role used for role-based access controls. Most users should be `user`. Users who need broader access to projects for oversight should be `manager`. See documentation for more details.",
+    )
+    enable_finding_create = BooleanField(
+        default=False,
+        help_text="Allow the user to create new findings in the library (only applies to account with the User role)",
+        verbose_name="Allow Finding Creation",
+    )
+    enable_finding_edit = BooleanField(
+        default=False,
+        help_text="Allow the user to edit findings in the library (only applies to accounts with the User role)",
+        verbose_name="Allow Finding Editing",
+    )
+    enable_finding_delete = BooleanField(
+        default=False,
+        help_text="Allow the user to delete findings in the library (only applies to accounts with the User role)",
+        verbose_name="Allow Finding Deleting",
+    )
+    enable_observation_create = BooleanField(
+        default=False,
+        help_text="Allow the user to create new observations in the library (only applies to account with the User role)",
+        verbose_name="Allow Observation Creation",
+    )
+    enable_observation_edit = BooleanField(
+        default=False,
+        help_text="Allow the user to edit observations in the library (only applies to accounts with the User role)",
+        verbose_name="Allow Observation Editing",
+    )
+    enable_observation_delete = BooleanField(
+        default=False,
+        help_text="Allow the user to delete observations in the library (only applies to accounts with the User role)",
+        verbose_name="Allow Observation Deleting",
+    )
+    enable_template_management = BooleanField(
+        default=False,
+        help_text=(
+            "Allow the user to manage global and protected report templates without "
+            "granting manager access to clients and projects"
+        ),
+        verbose_name="Allow Report Template Management",
+    )
+    require_mfa = BooleanField(
+        # Keep the original database column name for backward compatibility with existing databases
+        db_column="require_2fa",
+        default=False,
+        help_text="Require the user to set up multi-factor authentication",
+        verbose_name="Require MFA",
+    )
+    sidebar_preferences = JSONField(
+        default=dict,
+        blank=True,
+        help_text="Versioned IDs for the user's pinned sidebar shortcuts",
+    )
+    workspace_preferences = JSONField(
+        default=dict,
+        blank=True,
+        help_text="Versioned pinned work and recent working-report IDs",
+    )
 
     def get_absolute_url(self):
-        return reverse("users:detail", kwargs={"username": self.username})
+        return reverse("users:user_detail", args=(self.username,))
 
     def get_display_name(self):
-        """
-        Return a display name appropriate for dropdown menus.
-        """
+        """Return a display name appropriate for dropdown menus."""
         if self.name:
             display_name = "{full_name} ({username})".format(
                 full_name=self.name, username=self.username
@@ -71,3 +137,36 @@ class User(AbstractUser):
         display the user's name in different places in the admin site.
         """
         return self.name
+
+    def get_clean_username(self):
+        """Return a hex-encoded username to ensure the username is safe for WebSockets channel names."""
+        return hexlify(self.username.encode()).decode()
+
+    @property
+    def is_privileged(self):
+        """
+        Verify that the user holds a privileged role or the ``is_staff`` flag.
+        """
+        return self.role in ("admin", "manager") or self.is_staff
+
+    @property
+    def can_manage_report_templates(self):
+        """Return whether the user has elevated report-template authority."""
+        return self.is_privileged or self.enable_template_management
+
+    def save(self, *args, **kwargs):
+        # Align Django's permissions flags with the chosen role
+        if self.role == "user":
+            self.is_staff = False
+            self.is_superuser = False
+
+        # Set the `is_staff` and `is_superuser` flags based on the role
+        if self.role in ["admin"]:
+            self.is_staff = True
+            self.is_superuser = True
+
+        # Set the role to admin if the user is a superuser or staff
+        if self.is_superuser or self.is_staff:
+            self.role = "admin"
+
+        super().save(*args, **kwargs)
